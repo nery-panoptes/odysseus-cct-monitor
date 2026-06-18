@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="assets/odysseus-github-banner.png" alt="Odysséus CCT Monitor" width="100%">
+</p>
+
 # Odysséus CCT Monitor
 
 Odysséus é uma automação em Python para consulta periódica de instrumentos coletivos registrados no Mediador/MTE.
