@@ -1,0 +1,45 @@
+# Ambiente local
+.venv/
+venv/
+env/
+__pycache__/
+*.pyc
+.DS_Store
+
+# Configurações reais
+config.toml
+.env
+
+# Banco de dados real e dados locais
+data/*
+!data/.gitkeep
+!data/odysses_cct_base.sample.sqlite
+*.sqlite
+*.sqlite3
+*.db
+!data/odysses_cct_base.sample.sqlite
+
+# Saídas do robô
+downloads/
+logs/
+outbox/
+reports/
+
+# E-mails e arquivos gerados
+*.eml
+*.doc
+*.docx
+*.pdf
+
+# Planilhas e arquivos importados
+*.xls
+*.xlsx
+*.csv
+
+# Arquivos de navegador/sessão
+*.har
+
+# Backups locais
+*_BACKUP*
+*.bak
+*.zip

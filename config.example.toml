@@ -1,0 +1,53 @@
+[app]
+name = "Odysséus"
+db = "data/odysses_cct_base.sample.sqlite"
+reports = "reports"
+logs = "logs"
+downloads = "downloads"
+outbox = "outbox"
+
+[monitor]
+ufs = ["DF", "GO"]
+active_only = true
+send_duplicates = false
+min_registration_year_to_alert = 2025
+alert_without_registration_year = false
+instrument_types = [
+  "acordo",
+  "convencao",
+  "termoAditivoAcordo",
+  "termoAditivoConvecao"
+]
+
+[email]
+enabled = true
+provider = "smtp"
+smtp_host = "smtp.gmail.com"
+smtp_port = 587
+use_tls = true
+
+from_email = "seu-email@seudominio.com"
+from_name = "Odysséus, Robô de Monitoramento de Convenções Coletivas"
+
+to = ["destinatario@seudominio.com"]
+cc = []
+bcc = []
+
+subject_prefix = "ColeConv"
+send_when_empty = true
+attach_report = true
+attach_new_files = true
+banner_path = ""
+banner_width = 360
+dry_run = true
+
+max_new_items_to_send = 50
+
+[mte]
+timeout = 120
+delay = 2.5
+max_pages = 1000
+empty_limit = 3
+same_page_limit = 5
+repeat_limit = 8
+recaptcha_token = ""

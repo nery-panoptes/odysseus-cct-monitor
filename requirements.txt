@@ -1,0 +1,7 @@
+openpyxl>=3.1.2
+beautifulsoup4>=4.12.3
+lxml>=5.2.1
+curl_cffi>=0.7.0
+
+requests
+beautifulsoup4
