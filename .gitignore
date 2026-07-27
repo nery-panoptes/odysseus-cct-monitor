@@ -8,7 +8,13 @@ __pycache__/
 
 # Configurações reais
 config.toml
+config.*.toml
+!config.example.toml
 .env
+.env.*
+!.env.example
+*.pem
+*.key
 
 # Banco de dados real e dados locais
 data/*
@@ -24,6 +30,8 @@ downloads/
 logs/
 outbox/
 reports/
+tmp/
+temp/
 
 # E-mails e arquivos gerados
 *.eml
@@ -35,6 +43,7 @@ reports/
 *.xls
 *.xlsx
 *.csv
+odysses_cct_base_sqlite/
 
 # Arquivos de navegador/sessão
 *.har

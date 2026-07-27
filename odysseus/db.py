@@ -57,7 +57,57 @@ class Db:
             )
         """)
 
+        cur.execute("""
+            create table if not exists empresas_escritorio (
+                id integer primary key autoincrement,
+                source_key text,
+                empresa_id text,
+                razao_social text,
+                documento text,
+                tipo_documento text,
+                ativo integer default 1,
+                origem text,
+                updated_at text default current_timestamp,
+                unique(documento, tipo_documento, origem)
+            )
+        """)
+
+        self.ensure_column("instrumentos_mte", "arquivo_tipo_detectado", "text")
+        self.ensure_column("instrumentos_mte", "resumo_mudancas", "text")
+        self.ensure_column("instrumentos_mte", "resumo_status", "text")
+        self.ensure_column("instrumentos_mte", "resumo_gerado_em", "text")
+        self.ensure_column("instrumentos_mte", "ocr_necessario", "integer default 0")
+        self.ensure_column("instrumentos_mte", "empresa_filter_status", "text")
+        self.ensure_column("instrumentos_mte", "empresas_documento_json", "text")
+        self.ensure_column("instrumentos_mte", "empresas_escritorio_json", "text")
+        self.ensure_column("instrumentos_mte", "empresa_filter_motivo", "text")
+
         self.con.commit()
+
+    def table_columns(self, table):
+        return {
+            row["name"]
+            for row in self.con.execute(f"pragma table_info({table})").fetchall()
+        }
+
+    def table_exists(self, table):
+        row = self.con.execute("""
+            select 1
+            from sqlite_master
+            where type = 'table'
+              and name = ?
+            limit 1
+        """, (table,)).fetchone()
+        return row is not None
+
+    def ensure_column(self, table, name, definition):
+        if not self.table_exists(table):
+            return
+
+        if name in self.table_columns(table):
+            return
+
+        self.con.execute(f"alter table {table} add column {name} {definition}")
 
     def counts(self):
         tables = [
@@ -110,6 +160,56 @@ class Db:
         sql += " order by c.uf_inferida, c.nome"
 
         return [dict(row) for row in self.con.execute(sql).fetchall()]
+
+    def replace_office_companies(self, rows, origem):
+        origem = str(origem or "").strip() or "base_empresas"
+
+        cur = self.con.cursor()
+        cur.execute("delete from empresas_escritorio where origem = ?", (origem,))
+
+        for row in rows or []:
+            cur.execute("""
+                insert or replace into empresas_escritorio (
+                    source_key,
+                    empresa_id,
+                    razao_social,
+                    documento,
+                    tipo_documento,
+                    ativo,
+                    origem,
+                    updated_at
+                ) values (?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                str(row.get("source_key") or ""),
+                str(row.get("empresa_id") or ""),
+                str(row.get("razao_social") or ""),
+                str(row.get("documento") or ""),
+                str(row.get("tipo_documento") or ""),
+                1 if row.get("ativo", 1) else 0,
+                origem,
+                now(),
+            ))
+
+        self.con.commit()
+
+    def office_companies(self, document_type="cnpj", only_active=True):
+        sql = """
+            select *
+            from empresas_escritorio
+            where coalesce(documento, '') != ''
+        """
+        params = []
+
+        if document_type:
+            sql += " and tipo_documento = ?"
+            params.append(document_type)
+
+        if only_active:
+            sql += " and coalesce(ativo, 1) = 1"
+
+        sql += " order by razao_social, documento"
+
+        return [dict(row) for row in self.con.execute(sql, params).fetchall()]
 
     def known_manual_summary(self):
         sql = """
@@ -232,7 +332,7 @@ class Db:
         """, (
             instrumento_id,
             subject,
-            json.dumps(["jose.nery@felipegaiao.com.br"], ensure_ascii=False),
+            json.dumps(["destinatario@seudominio.com.br"], ensure_ascii=False),
             json.dumps([], ensure_ascii=False),
         ))
 
@@ -343,6 +443,96 @@ class Db:
             where id = ?
         """, (str(path or ""), instrumento_id))
         self.con.commit()
+
+    def set_instrument_summary(
+        self,
+        instrumento_id,
+        summary,
+        status="",
+        file_type="",
+        ocr_needed=False,
+    ):
+        self.con.execute("""
+            update instrumentos_mte
+            set
+                resumo_mudancas = ?,
+                resumo_status = ?,
+                arquivo_tipo_detectado = ?,
+                ocr_necessario = ?,
+                resumo_gerado_em = ?
+            where id = ?
+        """, (
+            str(summary or ""),
+            str(status or ""),
+            str(file_type or ""),
+            1 if ocr_needed else 0,
+            now(),
+            instrumento_id,
+        ))
+        self.con.commit()
+
+    def set_company_filter(
+        self,
+        instrumento_id,
+        status,
+        document_cnpjs=None,
+        matched_companies=None,
+        reason="",
+    ):
+        self.con.execute("""
+            update instrumentos_mte
+            set
+                empresa_filter_status = ?,
+                empresas_documento_json = ?,
+                empresas_escritorio_json = ?,
+                empresa_filter_motivo = ?
+            where id = ?
+        """, (
+            str(status or ""),
+            json.dumps(document_cnpjs or [], ensure_ascii=False),
+            json.dumps(matched_companies or [], ensure_ascii=False),
+            str(reason or ""),
+            instrumento_id,
+        ))
+        self.con.commit()
+
+    def previous_instrument(self, item, current_id=None):
+        cnpj = item.get("sindicato_cnpj") or ""
+        typ = item.get("tipo_instrumento") or ""
+        current_vigencia = item.get("vigencia_inicio") or ""
+
+        if not cnpj or not typ:
+            return None
+
+        params = [cnpj, typ]
+        current_filter = ""
+
+        if current_id:
+            current_filter = "and id != ?"
+            params.append(current_id)
+
+        params.extend([current_vigencia, current_vigencia])
+
+        sql = f"""
+            select *
+            from instrumentos_mte
+            where sindicato_cnpj = ?
+              and tipo_instrumento = ?
+              and coalesce(arquivo_path, '') != ''
+              {current_filter}
+            order by
+              case
+                when ? != '' and coalesce(vigencia_inicio, '') < ? then 0
+                else 1
+              end,
+              coalesce(vigencia_inicio, '') desc,
+              coalesce(data_registro, '') desc,
+              id desc
+            limit 1
+        """
+
+        row = self.con.execute(sql, params).fetchone()
+        return dict(row) if row else None
 
     def create_alert(self, instrumento_id, subject, recipients=None, attachments=None):
         recipients = recipients or []

@@ -26,9 +26,15 @@ from pathlib import Path
 from urllib.parse import quote, unquote, urljoin
 
 try:
-    import requests
+    from curl_cffi import requests as http_requests
+    HTTP_BACKEND = "curl_cffi"
 except ModuleNotFoundError:
-    requests = None
+    try:
+        import requests as http_requests
+        HTTP_BACKEND = "requests"
+    except ModuleNotFoundError:
+        http_requests = None
+        HTTP_BACKEND = ""
 
 try:
     from bs4 import BeautifulSoup
@@ -44,7 +50,7 @@ INSTRUMENT_TYPES = {
     "termoAditivoConvecao": "Termo Aditivo de Convenção Coletiva",
 }
 
-SITE_ROOT = "https://www3.mte.gov.br"
+SITE_ROOT = "https://mediador.trabalho.gov.br"
 BASE_URL = SITE_ROOT + "/sistemas/mediador/ConsultarInstColetivo"
 SEARCH_URL = BASE_URL + "/getConsultaAvancada"
 TOKEN_URL = BASE_URL + "/GenerateSecurityToken"
@@ -157,15 +163,24 @@ def nonefound(raw):
     return any(item in text for item in checks)
 
 
-def blocked(raw, code):
+def block_reason(raw, code, headers=None):
     text = (raw or "").lower()
+    headers = headers or {}
+    lower_headers = {str(k).lower(): str(v).lower() for k, v in headers.items()}
+
+    if lower_headers.get("cf-mitigated") == "challenge":
+        return "Cloudflare exigiu desafio de JavaScript/cookies antes de liberar o Mediador/MTE."
+
+    if "enable javascript and cookies to continue" in text or "just a moment" in text:
+        return "Cloudflare exigiu JavaScript e cookies antes de liberar o Mediador/MTE."
+
+    if "recaptcha" in text or "g-recaptcha" in text:
+        return "O MTE exigiu reCAPTCHA para esta consulta."
 
     if code in (401, 403, 429):
-        return True
+        return f"O MTE recusou a consulta com HTTP {code}."
 
     checks = [
-        "recaptcha",
-        "g-recaptcha",
         "captcha",
         "cloudflare",
         "access denied",
@@ -173,27 +188,41 @@ def blocked(raw, code):
         "forbidden",
     ]
 
-    return any(item in text for item in checks)
+    for item in checks:
+        if item in text:
+            return f"O MTE retornou página de bloqueio ou desafio ({item})."
+
+    return ""
+
+
+def blocked(raw, code, headers=None):
+    return bool(block_reason(raw, code, headers=headers))
 
 
 class MteClient:
     def __init__(self, cfg):
-        if requests is None:
+        if http_requests is None:
             raise RuntimeError(
-                "Instale a dependência requests: pip install requests"
+                "Instale a dependência curl_cffi ou requests: pip install curl_cffi requests"
             )
 
         self.cfg = cfg
         self.timeout = int(getsec(cfg, "timeout", 60))
         self.delay = float(getsec(cfg, "delay", 0.8))
         self.maxpages = int(getsec(cfg, "max_pages", 10))
+        self.http_backend = getsec(cfg, "http_backend", "auto")
+        self.impersonate = getsec(cfg, "impersonate", "chrome")
         self.token = (
             os.getenv("ODYSSEUS_RECAPTCHA_TOKEN")
             or getsec(cfg, "recaptcha_token", "")
             or ""
         )
 
-        self.ses = requests.Session()
+        if HTTP_BACKEND == "curl_cffi" and self.http_backend in ("auto", "curl_cffi"):
+            self.ses = http_requests.Session(impersonate=self.impersonate)
+        else:
+            self.ses = http_requests.Session()
+
         self.ses.headers.update({
             "User-Agent": (
                 "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
@@ -359,11 +388,13 @@ class MteClient:
                 print(f"    página {page}: nenhum registro novo. Parando.")
                 break
 
-            if blocked(raw, lastcode):
+            reason = block_reason(raw, lastcode, headers=res.headers)
+
+            if reason:
                 return {
                     "ok": False,
                     "status": "captcha_or_blocked",
-                    "message": "O MTE exigiu captcha, bloqueou a sessão ou recusou a consulta.",
+                    "message": reason,
                     "cnpj": cnpj,
                     "uf": uf,
                     "type": instrument_type,

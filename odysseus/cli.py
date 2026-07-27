@@ -8,8 +8,21 @@ from .cfg import loadcfg, sec
 from .db import Db
 from .emailer import Emailer
 from .mte import DOWNLOAD_URL, INSTRUMENT_TYPES, MteClient
+from .office import (
+    apply_company_filter,
+    format_company_matches,
+    load_monitor_candidates,
+    monitor_name_filter_report,
+    refresh_office_companies,
+)
 from .report import write_csv
+from .summarizer import build_document_summary, detect_file_type, summary_enabled
 from .util import root
+
+
+class FatalMteBlock(RuntimeError):
+    pass
+
 
 def opendb(cfg):
     base = Path(cfg["base"])
@@ -69,6 +82,79 @@ def cmd_baseline_summary(args):
 
         print(f"Resumo baseline manual exportado: {len(rows)}")
         print(f"Arquivo: {out}")
+
+    finally:
+        db.close()
+
+
+def cmd_office_companies_check(args):
+    cfg = loadcfg(args.config)
+    db = opendb(cfg)
+
+    try:
+        refresh_office_companies(cfg, db)
+        rows = db.office_companies(document_type="", only_active=False)
+        cnpjs = [row for row in rows if row.get("tipo_documento") == "cnpj"]
+        cpfs = [row for row in rows if row.get("tipo_documento") == "cpf"]
+
+        print("Base de empresas do escritório atualizada.")
+        print(f"- Registros totais: {len(rows)}")
+        print(f"- CNPJs: {len(cnpjs)}")
+        print(f"- CPFs: {len(cpfs)}")
+        print("")
+
+        for row in cnpjs[:10]:
+            print(f"- {row.get('razao_social') or '(sem razão social)'} | {row.get('documento')}")
+
+        if len(cnpjs) > 10:
+            print(f"- ... mais {len(cnpjs) - 10} CNPJ(s).")
+
+    finally:
+        db.close()
+
+
+def cmd_monitor_source_check(args):
+    cfg = loadcfg(args.config)
+    db = opendb(cfg)
+
+    try:
+        source = str(sec(cfg, "monitor_source").get("source", "database") or "database")
+
+        if source.lower() in {"google_sheet_filter", "google_sheet_name_filter", "name_filter"}:
+            report = monitor_name_filter_report(cfg, db, only_with_cnpj=True)
+
+            print("Fonte online de sindicatos conferida.")
+            print(f"- Coluna usada: {report['filter_column']}")
+            print(f"- URL CSV: {report['csv_url']}")
+            print(f"- Nomes unicos na planilha: {report['total_sheet_names']}")
+            print(f"- Candidatos com CNPJ antes do filtro: {report['total_candidates_before']}")
+            print(f"- Candidatos apos filtro DF/GO: {report['total_candidates_after_uf_scope']}")
+            print(f"- Candidatos que serao consultados: {report['total_candidates_after']}")
+            print("")
+
+            print("Primeiros candidatos que serao consultados:")
+
+            for row in report["candidates"][:20]:
+                print(f"- {row.get('nome') or ''} | {row.get('cnpj') or ''} | UF {row.get('uf_inferida') or ''}")
+
+            if len(report["candidates"]) > 20:
+                print(f"- ... mais {len(report['candidates']) - 20} candidato(s).")
+
+            if report["unmatched_names"]:
+                print("")
+                print("Nomes da planilha sem CNPJ correspondente no cadastro local:")
+
+                for name in report["unmatched_names"][:30]:
+                    print(f"- {name}")
+
+                if len(report["unmatched_names"]) > 30:
+                    print(f"- ... mais {len(report['unmatched_names']) - 30} nome(s).")
+
+            return
+
+        rows, monitor_source = load_monitor_candidates(cfg, db, only_with_cnpj=True)
+        print(f"Fonte dos sindicatos: {monitor_source}")
+        print(f"Candidatos com CNPJ: {len(rows)}")
 
     finally:
         db.close()
@@ -330,8 +416,24 @@ def build_daily_body(new_items, errors, finished_at=None, stats=None):
             lines.append(f"  Vigência: {item.get('vigencia_inicio') or ''} até {item.get('vigencia_fim') or ''}")
             lines.append(f"  UF: {item.get('uf') or ''}")
 
+            company_matches = format_company_matches(item.get("empresas_escritorio_match") or [])
+
+            if company_matches:
+                lines.append(f"  Empresas do escritório relacionadas: {company_matches}")
+
             if item.get("url_documento"):
                 lines.append(f"  Link: {item.get('url_documento')}")
+
+            summary = str(item.get("resumo_mudancas") or "").strip()
+
+            if summary:
+                lines.append("  Resumo automático das mudanças:")
+
+                for summary_line in summary.splitlines():
+                    summary_line = summary_line.strip()
+
+                    if summary_line:
+                        lines.append(f"  - {summary_line}")
 
             lines.append("")
 
@@ -364,6 +466,7 @@ def build_daily_body(new_items, errors, finished_at=None, stats=None):
         lines.append(f"- Instrumentos já existentes no banco: {stats.get('total_existing', 0)}")
         lines.append(f"- Novos instrumentos identificados: {stats.get('total_new', 0)}")
         lines.append(f"- Instrumentos ignorados por ano antigo/sem ano: {stats.get('total_ignored_old', 0)}")
+        lines.append(f"- Acordos ignorados por empresa fora da base: {stats.get('total_filtered_company', 0)}")
         lines.append(f"- Documentos baixados: {stats.get('total_downloaded', 0)}")
         lines.append(f"- Ocorrências/erros: {len(errors)}")
 
@@ -403,7 +506,49 @@ def download_daily_doc(client, cfg, item):
 
     client.download(url, path)
 
+    detected = detect_file_type(path)
+    detected_ext = detected.get("extension") or "doc"
+
+    if detected_ext and detected_ext != path.suffix.lstrip(".").lower():
+        new_path = path.with_suffix(f".{detected_ext}")
+        path.replace(new_path)
+        path = new_path
+
     return str(path)
+
+
+def summarize_daily_doc(db, cfg, item, instrumento_id, file_path):
+    if not summary_enabled(cfg) or not file_path:
+        return ""
+
+    previous = db.previous_instrument(item, current_id=instrumento_id)
+    previous_path = ""
+
+    if previous:
+        previous_path = previous.get("arquivo_path") or ""
+
+    result = build_document_summary(
+        file_path,
+        item=item,
+        previous_path=previous_path,
+        cfg=cfg,
+    )
+
+    summary = result.get("summary") or ""
+
+    item["resumo_mudancas"] = summary
+    item["arquivo_tipo_detectado"] = result.get("file_type") or ""
+    item["ocr_necessario"] = result.get("ocr_needed") or False
+
+    db.set_instrument_summary(
+        instrumento_id,
+        summary,
+        status=result.get("status") or "",
+        file_type=result.get("file_type") or "",
+        ocr_needed=result.get("ocr_needed") or False,
+    )
+
+    return summary
 
 def cmd_daily(args):
     cfg = loadcfg(args.config)
@@ -419,6 +564,9 @@ def cmd_daily(args):
     total_new = 0
     total_downloaded = 0
     total_ignored_old = 0
+    total_filtered_company = 0
+    blocked_hits = 0
+    blocked_abort_after = int(sec(cfg, "mte").get("blocked_abort_after", 2))
 
     errors = []
     new_items = []
@@ -427,7 +575,12 @@ def cmd_daily(args):
     seen_keys = set()
 
     try:
-        rows = db.monitor_candidates(only_with_cnpj=True)
+        if bool(sec(cfg, "office_companies").get("refresh_on_daily", True)):
+            office_companies = refresh_office_companies(cfg, db)
+        else:
+            office_companies = db.office_companies(document_type="cnpj")
+
+        rows, monitor_source = load_monitor_candidates(cfg, db, only_with_cnpj=True)
 
         if limit:
             rows = rows[:limit]
@@ -436,6 +589,8 @@ def cmd_daily(args):
 
         print("Daily real iniciado.")
         print(f"Sindicatos candidatos com CNPJ válido: {len(rows)}")
+        print(f"Fonte dos sindicatos: {monitor_source}")
+        print(f"Empresas com CNPJ na base do escritório: {len(office_companies)}")
         print("Modo: consultar MTE, comparar com banco e alertar somente novidades.")
         print("")
 
@@ -465,6 +620,28 @@ def cmd_daily(args):
 
                         print(f"    - {typ}: {status} | coletados: {len(items)}")
 
+                        if not result.get("ok", True):
+                            message = result.get("message") or "Consulta recusada pelo MTE."
+                            http_code = result.get("http_code") or ""
+                            err = (
+                                f"{name} | {cnpj} | {uf} | {typ}: "
+                                f"{message} (status: {status}, HTTP {http_code})"
+                            )
+                            errors.append(err)
+
+                            if status == "captcha_or_blocked":
+                                blocked_hits += 1
+
+                                if blocked_hits >= blocked_abort_after:
+                                    raise FatalMteBlock(
+                                        "MTE bloqueou as consultas por desafio de navegador/cookies. "
+                                        "Execução interrompida para evitar varredura inútil e e-mail incorreto. "
+                                        f"Última ocorrência: {message}"
+                                    )
+
+                            continue
+
+                        blocked_hits = 0
                         total_seen += len(items)
 
                         for item in items:
@@ -505,22 +682,20 @@ def cmd_daily(args):
 
                                 continue
 
-                            if no_send:
-                                total_new += 1
-                                new_items.append(item)
-                                continue
+                            inst_id = None
+                            was_new = True
 
-                            inst_id, was_new = db.save_mte_instrument(
-                                item,
-                                sindicato_nome=name,
-                                known_before=False,
-                            )
+                            if not no_send:
+                                inst_id, was_new = db.save_mte_instrument(
+                                    item,
+                                    sindicato_nome=name,
+                                    known_before=False,
+                                )
 
-                            if not was_new:
-                                total_existing += 1
-                                continue
+                                if not was_new:
+                                    total_existing += 1
+                                    continue
 
-                            total_new += 1
 
                             file_path = ""
 
@@ -529,8 +704,9 @@ def cmd_daily(args):
                                     file_path = download_daily_doc(client, cfg, item)
 
                                     if file_path:
-                                        db.set_instrument_file(inst_id, file_path)
-                                        attachments.append(file_path)
+                                        if inst_id:
+                                            db.set_instrument_file(inst_id, file_path)
+
                                         total_downloaded += 1
 
                                 except Exception as err:
@@ -540,22 +716,72 @@ def cmd_daily(args):
                                         f"{item.get('numero_solicitacao')}: {err}"
                                     )
 
+                            try:
+                                company_decision = apply_company_filter(
+                                    db,
+                                    cfg,
+                                    item,
+                                    inst_id,
+                                    file_path,
+                                    office_companies,
+                                )
+                            except Exception as err:
+                                company_decision = {"should_alert": True}
+                                errors.append(
+                                    f"Falha ao aplicar filtro de empresas "
+                                    f"{item.get('numero_registro')} / "
+                                    f"{item.get('numero_solicitacao')}: {err}"
+                                )
+
+                            if not company_decision.get("should_alert", True):
+                                total_filtered_company += 1
+                                print(
+                                    "      ignorado: empresa do acordo fora da base do escritório "
+                                    f"({item.get('numero_registro') or item.get('numero_solicitacao')})"
+                                )
+                                continue
+
+                            total_new += 1
+
+                            if file_path:
+                                attachments.append(file_path)
+
+                            if inst_id and file_path:
+                                try:
+                                    summarize_daily_doc(
+                                        db,
+                                        cfg,
+                                        item,
+                                        inst_id,
+                                        file_path,
+                                    )
+                                except Exception as err:
+                                    errors.append(
+                                        f"Falha ao gerar resumo automático "
+                                        f"{item.get('numero_registro')} / "
+                                        f"{item.get('numero_solicitacao')}: {err}"
+                                    )
+
                             subject = (
                                 "Novo instrumento coletivo identificado - "
                                 f"{item.get('numero_registro') or item.get('numero_solicitacao') or 'sem número'}"
                             )
 
-                            alert_id, created = db.create_alert(
-                                inst_id,
-                                subject,
-                                recipients=sec(cfg, "email").get("to", []),
-                                attachments=[file_path] if file_path else [],
-                            )
+                            if not no_send:
+                                alert_id, created = db.create_alert(
+                                    inst_id,
+                                    subject,
+                                    recipients=sec(cfg, "email").get("to", []),
+                                    attachments=[file_path] if file_path else [],
+                                )
 
-                            if alert_id:
-                                alert_ids.append(alert_id)
+                                if alert_id:
+                                    alert_ids.append(alert_id)
 
                             new_items.append(item)
+
+                    except FatalMteBlock:
+                        raise
 
                     except Exception as err:
                         errors.append(f"{name} | {cnpj} | {uf} | {typ}: {err}")
@@ -569,6 +795,7 @@ def cmd_daily(args):
         print(f"Já existentes no banco: {total_existing}")
         print(f"Novos instrumentos: {total_new}")
         print(f"Ignorados por ano antigo/sem ano: {total_ignored_old}")
+        print(f"Ignorados por empresa fora da base: {total_filtered_company}")
         print(f"Documentos baixados: {total_downloaded}")
         print(f"Erros: {len(errors)}")
         print("")
@@ -581,6 +808,7 @@ def cmd_daily(args):
             "total_existing": total_existing,
             "total_new": total_new,
             "total_ignored_old": total_ignored_old,
+            "total_filtered_company": total_filtered_company,
             "total_downloaded": total_downloaded,
         }
 
@@ -626,6 +854,16 @@ def cmd_daily(args):
         else:
             db.mark_alerts_sent(alert_ids)
             print("E-mail de monitoramento enviado com sucesso.")
+
+    except FatalMteBlock as err:
+        try:
+            db.mark_alerts_error(alert_ids, err)
+        except Exception:
+            pass
+
+        print("")
+        print(f"Execução interrompida: {err}")
+        print("Nenhum e-mail de monitoramento foi enviado.")
 
     except Exception as err:
         try:
@@ -744,6 +982,12 @@ def main():
 
     p = sub.add_parser("baseline-summary", help="Exporta resumo da base manual já conhecida.")
     p.set_defaults(func=cmd_baseline_summary)
+
+    p = sub.add_parser("office-companies-check", help="Atualiza e confere a base de empresas do escritório.")
+    p.set_defaults(func=cmd_office_companies_check)
+
+    p = sub.add_parser("monitor-source-check", help="Confere a fonte configurada de sindicatos do monitoramento.")
+    p.set_defaults(func=cmd_monitor_source_check)
 
     p = sub.add_parser("email-test", help="Testa o envio de e-mail.")
     p.add_argument("--create-alert", action="store_true", help="Cria um alerta fictício no banco antes do teste.")

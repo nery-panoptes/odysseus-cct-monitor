@@ -4,353 +4,200 @@
 
 # Odysséus CCT Monitor
 
-Odysséus é uma automação em Python para consulta periódica de instrumentos coletivos registrados no Mediador/MTE.
+Odysséus é uma automação em Python para consultar periodicamente instrumentos coletivos registrados no Mediador/MTE, manter histórico local e enviar alertas por e-mail quando surgirem novas convenções, acordos ou termos aditivos relevantes.
 
-O projeto mantém uma base histórica dos instrumentos já conhecidos, identifica novos registros e envia alertas por e-mail com resumo da execução.
+## Atualização 2026-07-24
 
-## Objetivo
+Esta versão adiciona uma camada de inteligência operacional ao monitoramento:
 
-Automatizar uma rotina repetitiva de monitoramento, reduzindo o risco de perda de novos registros e organizando o histórico de instrumentos coletivos consultados.
+* filtro de sindicatos por planilha online do Google Sheets;
+* filtro de acordos específicos por CNPJ das empresas/clientes do escritório;
+* resumo automático local dos documentos baixados;
+* detecção do tipo de arquivo baixado e indicação de necessidade de OCR;
+* melhoria no tratamento de bloqueios/captcha do Mediador/MTE;
+* configuração preparada para execução local ou agendada por GitHub Actions.
 
-O projeto foi desenvolvido para apoiar rotinas operacionais que dependem do acompanhamento de acordos coletivos, convenções coletivas e termos aditivos registrados no Mediador/MTE.
+<p align="center">
+  <img src="assets/odysseus-lets-go-larp.png" alt="Meme de atualização do Odysséus: lets go larp" width="520">
+</p>
 
-## Funcionalidades
+## O que ele faz
 
-* Consulta de instrumentos coletivos no Mediador/MTE.
-* Monitoramento por CNPJ de sindicatos.
-* Controle de base histórica local em SQLite.
-* Identificação de novos instrumentos registrados.
-* Filtro de segurança por ano de registro.
-* Download de documentos vinculados aos instrumentos encontrados.
-* Envio de alertas por e-mail.
-* Execução diária com resumo da rotina.
-* Geração de e-mail de conclusão mesmo quando não houver novos registros, se configurado.
+* Consulta acordos coletivos, convenções coletivas e termos aditivos no Mediador/MTE.
+* Controla uma base histórica em SQLite para evitar alertas duplicados.
+* Baixa os documentos encontrados e mantém os anexos no e-mail.
+* Envia e-mail de conclusão mesmo quando nada novo é encontrado, se configurado.
+* Resume localmente os pontos principais dos documentos novos.
+* Filtra acordos específicos de empresa quando a empresa do documento não está na base de clientes.
 
-## Tipos de instrumentos monitorados
+## IA local gratuita
 
-* Acordo Coletivo.
-* Convenção Coletiva.
-* Termo Aditivo de Acordo Coletivo.
-* Termo Aditivo de Convenção Coletiva.
+A IA desta versão se chama, dentro do projeto, **Odysséus Local Rules**.
 
-## Estrutura do projeto
+Ela não usa OpenAI, Gemini, Claude ou qualquer API paga. O resumo é feito no próprio Python, com extração de texto, identificação de cláusulas, datas, valores, benefícios, jornada, descontos e comparação com documento anterior quando existir arquivo comparável salvo.
+
+Isso mantém custo zero e evita limite diário de tokens. Para PDFs escaneados, o projeto pode indicar necessidade de OCR. O OCR também pode ser mantido em custo zero usando ferramentas locais como Tesseract/OCRmyPDF, caso sejam instaladas no ambiente.
+
+## Fluxo atual
+
+1. O Odysséus carrega o `config.toml` local.
+2. Ele abre o banco SQLite configurado em `[app].db`.
+3. Ele carrega os sindicatos candidatos.
+4. Se `[monitor_source].source = "google_sheet_filter"`, a lista bruta do banco é filtrada pelos nomes presentes na coluna configurada da planilha online.
+5. Para cada sindicato, UF e tipo de instrumento, ele consulta o Mediador/MTE.
+6. Se o MTE retornar bloqueio, captcha ou Cloudflare, a rotina registra o erro e pode abortar depois do limite configurado.
+7. Quando encontra instrumento novo, ele grava no banco e baixa o documento.
+8. O resumo local extrai texto do arquivo e gera bullets curtos para o e-mail.
+9. Se o instrumento for acordo ou termo aditivo de acordo, o sistema procura CNPJs de empresas nas partes do documento.
+10. Se a empresa do acordo não estiver na base de empresas/clientes, o alerta é filtrado e não é enviado.
+11. Se passar nos filtros, o e-mail é enviado com o resumo e com o documento anexo.
+
+## Arquivos seguros e arquivos privados
+
+Este repositório público deve receber apenas código, documentação e exemplos.
+
+Ficam fora do GitHub:
+
+* `config.toml` real;
+* `.env` real;
+* banco SQLite de produção;
+* planilhas internas;
+* relatórios gerados;
+* logs;
+* downloads do Mediador/MTE;
+* arquivos `.eml` gerados em dry-run.
+
+O arquivo público correto é:
 
 ```text
-app.py
-odysseus/
-  __init__.py
-  cfg.py
-  cli.py
-  db.py
-  emailer.py
-  mte.py
-  report.py
-  util.py
-config.example.toml
-.env.example
-requirements.txt
-README.md
-SECURITY.md
-```
-
-## Arquivo de configuração
-
-O projeto utiliza um arquivo TOML para concentrar as principais configurações da rotina.
-
-No repositório, é disponibilizado apenas o arquivo:
-
-```text
 config.example.toml
 ```
 
-Esse arquivo serve como modelo seguro de configuração. Ele não contém dados reais de ambiente, credenciais, e-mails internos ou informações sensíveis.
-
-Para executar o projeto localmente, copie o arquivo de exemplo:
+Para executar em um ambiente real, copie:
 
 ```bash
 cp config.example.toml config.toml
 ```
 
-Depois edite o `config.toml` conforme o ambiente de uso.
+Depois edite o `config.toml` localmente.
 
-A regra correta é:
+## Instalação local
 
-```text
-config.example.toml -> vai para o GitHub
-config.toml         -> fica somente na máquina local
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+cp config.example.toml config.toml
+```
+
+No macOS, também existe um script auxiliar:
+
+```bash
+bash scripts/setup_mac.sh
 ```
 
 ## Configuração de e-mail
 
-O arquivo `config.toml` permite configurar remetente, destinatários e parâmetros de envio.
+A senha SMTP não deve ficar no `config.toml`.
 
-Exemplo:
-
-```toml
-[email]
-enabled = true
-provider = "smtp"
-smtp_host = "smtp.gmail.com"
-smtp_port = 587
-use_tls = true
-
-from_email = "email-do-robo@seudominio.com"
-from_name = "Odysséus, Robô de Monitoramento de Convenções Coletivas"
-
-to = ["destinatario@seudominio.com"]
-cc = []
-bcc = []
-
-subject_prefix = "ColeConv"
-send_when_empty = true
-attach_new_files = true
-dry_run = true
-```
-
-O campo `to` define quem receberá os alertas enviados pelo robô.
-
-Também é possível configurar cópia e cópia oculta:
-
-```toml
-cc = ["copia@seudominio.com"]
-bcc = ["copia-oculta@seudominio.com"]
-```
-
-O parâmetro `dry_run` controla se o e-mail será realmente enviado.
-
-```toml
-dry_run = true
-```
-
-Quando `dry_run` estiver como `true`, o sistema apenas gera um arquivo `.eml` local para conferência.
-
-```toml
-dry_run = false
-```
-
-Quando `dry_run` estiver como `false`, o sistema realiza o envio pelo SMTP configurado.
-
-## Credenciais de e-mail
-
-Por segurança, a senha do e-mail não deve ser salva no `config.toml`.
-
-As credenciais SMTP devem ser informadas por variáveis de ambiente:
+Use variáveis de ambiente:
 
 ```bash
 export ODYSSEUS_SMTP_USER="email-do-robo@seudominio.com"
-export ODYSSEUS_SMTP_PASS="senha_de_app_sem_espacos"
+export ODYSSEUS_SMTP_PASS="senha_de_app"
 ```
 
-Dessa forma, o arquivo de configuração pode ser usado localmente sem expor credenciais no repositório.
+No GitHub Actions, esses valores devem ser cadastrados como **Repository secrets**.
 
-## Base de dados inicial
+## Fonte dos sindicatos
 
-O projeto depende de uma base local em SQLite para controlar sindicatos monitorados, vínculos com empresas, instrumentos coletivos já conhecidos e alertas gerados pelo robô.
-
-A base inicial pode ser estruturada a partir de uma planilha exportada de um sistema cadastral, como o Domínio, utilizada apenas como fonte para popular o banco local.
-
-A planilha original não acompanha este repositório, pois pode conter dados internos, CNPJs, razões sociais, vínculos sindicais e informações operacionais sensíveis.
-
-## Origem dos dados cadastrais
-
-A planilha de origem deve conter, no mínimo, informações que permitam identificar os sindicatos a serem monitorados no Mediador/MTE.
-
-Campos esperados na base de origem:
-
-* identificação da empresa;
-* razão social da empresa;
-* CNPJ da empresa, quando aplicável;
-* sindicato vinculado;
-* nome do sindicato;
-* CNPJ do sindicato;
-* unidade federativa, quando disponível;
-* categoria ou descrição do vínculo sindical, quando disponível.
-
-A estrutura exata da planilha pode variar conforme a parametrização do sistema utilizado pela organização. Por isso, antes da importação, recomenda-se revisar os cabeçalhos e normalizar os campos essenciais.
-
-## Banco SQLite local
-
-O projeto utiliza SQLite como banco local de controle operacional.
-
-A base local armazena informações como:
-
-* sindicatos cadastrados;
-* sindicatos selecionados para monitoramento;
-* vínculos entre empresas e sindicatos;
-* aliases ou nomes alternativos de sindicatos;
-* instrumentos coletivos já conhecidos;
-* instrumentos coletivos encontrados no Mediador/MTE;
-* alertas de e-mail gerados e status de envio;
-* inconsistências ou problemas identificados durante importações.
-
-O arquivo de banco utilizado em produção deve ser configurado no `config.toml`:
+O modo padrão usa o banco SQLite local:
 
 ```toml
-[app]
-db = "data/odysses_cct_base.sqlite"
+[monitor_source]
+source = "database"
 ```
 
-O banco real de produção não deve ser versionado no GitHub.
+Para filtrar a base local usando uma planilha compartilhada:
 
-## Fluxo técnico de preparação da base
-
-O fluxo recomendado para preparar a base local é:
-
-1. Exportar a planilha cadastral do sistema utilizado pela organização.
-2. Revisar se os sindicatos possuem CNPJ.
-3. Normalizar nomes, CNPJs e unidades federativas.
-4. Importar os dados para o banco SQLite local.
-5. Validar a quantidade de sindicatos candidatos ao monitoramento.
-6. Executar a rotina de baseline.
-7. Somente após o baseline executar a rotina diária.
-
-## Normalização dos dados
-
-Antes de gravar a base, recomenda-se aplicar os seguintes tratamentos:
-
-* remover pontuação de CNPJs;
-* descartar registros sem CNPJ de sindicato, quando o monitoramento depender de CNPJ;
-* padronizar unidades federativas em letras maiúsculas;
-* remover espaços duplicados em nomes;
-* tratar sindicatos duplicados;
-* criar aliases para sindicatos com nomes alternativos;
-* registrar inconsistências em tabela própria ou log de importação.
-
-Exemplo conceitual de normalização de CNPJ:
-
-```text
-Entrada: 00.000.000/0001-00
-Saída:   00000000000100
+```toml
+[monitor_source]
+source = "google_sheet_filter"
+google_sheet_url = "https://docs.google.com/spreadsheets/d/SEU_ID/edit?gid=SUA_ABA"
+filter_column = "NOME DO SINDICATO"
+respect_monitor_ufs = true
 ```
 
-## Baseline inicial
+Nesse modo, a planilha online funciona como régua operacional: o banco pode ter mais sindicatos, mas a rotina diária consulta apenas os nomes que continuam ativos na planilha.
 
-Antes de ativar o monitoramento diário, é necessário executar uma rotina de baseline.
+## Base de empresas
 
-O baseline consulta o Mediador/MTE para os sindicatos cadastrados e grava todos os instrumentos já existentes como conhecidos. Isso evita que documentos antigos sejam tratados como novidades na primeira execução do robô.
+Para filtrar acordos específicos de empresas, informe uma planilha privada com CNPJ das empresas/clientes:
 
-Fluxo do baseline:
+```toml
+[office_companies]
+enabled = true
+source_file = "data/empresas.example.xlsx"
+sheet_name = ""
+refresh_on_daily = true
+company_specific_types = ["acordo", "termoAditivoAcordo"]
+alert_when_company_unknown = true
+```
 
-1. Buscar sindicatos candidatos no banco local.
-2. Consultar o Mediador/MTE por CNPJ do sindicato.
-3. Consultar as unidades federativas configuradas no projeto.
-4. Consultar os tipos de instrumento monitorados.
-5. Gravar os instrumentos encontrados como já conhecidos.
-6. Não gerar alerta de e-mail nessa etapa.
+A planilha precisa ter uma coluna de CNPJ ou CPF/CNPJ e, preferencialmente, uma coluna de razão social. Ela não deve ser enviada para o GitHub.
 
-Comando:
+## Comandos principais
+
+Conferir a base de empresas:
 
 ```bash
-python -u app.py seed-baseline
+python -u app.py office-companies-check
 ```
 
-Após o baseline, recomenda-se validar se a rotina diária não identifica falsos positivos:
+Conferir o filtro da planilha online:
+
+```bash
+python -u app.py monitor-source-check
+```
+
+Rodar sem enviar e sem baixar arquivos:
 
 ```bash
 python -u app.py daily --no-send --no-download
 ```
 
-O resultado esperado após a calibragem é:
-
-```text
-Novos instrumentos: 0
-Erros: 0
-```
-
-## Rotina diária
-
-Após a base estar calibrada, a rotina diária pode ser executada.
+Rodar a rotina diária real:
 
 ```bash
 python -u app.py daily
 ```
 
-A rotina diária realiza:
-
-* consulta dos sindicatos monitorados;
-* comparação com os instrumentos já gravados no banco;
-* identificação de novos instrumentos;
-* filtro por ano mínimo de registro;
-* download de documentos, quando habilitado;
-* criação de alertas;
-* envio de e-mail com o resumo da execução.
-
-Para testar sem enviar e-mail e sem baixar documentos:
+Gerar baseline inicial:
 
 ```bash
-python -u app.py daily --no-send --no-download
+python -u app.py seed-baseline
 ```
 
-Para testar o e-mail em modo dry-run:
+Enviar um e-mail de teste com resumo local:
 
 ```bash
-python -u app.py email-test
+python -u scripts/test_summary_email.py --to seu-email-pessoal@seudominio.com --send
 ```
 
-## Parâmetros relevantes
+## GitHub Actions
 
-No `config.toml`, os principais parâmetros de monitoramento são:
-
-```toml
-[monitor]
-ufs = ["DF", "GO"]
-min_registration_year_to_alert = 2025
-alert_without_registration_year = false
-instrument_types = [
-  "acordo",
-  "convencao",
-  "termoAditivoAcordo",
-  "termoAditivoConvecao"
-]
-```
-
-O parâmetro `min_registration_year_to_alert` evita que instrumentos antigos encontrados por mudança de configuração, paginação ou unidade federativa sejam tratados como novos alertas.
-
-Exemplo:
+Há um exemplo de workflow em:
 
 ```text
-DF000145/2016 -> não gera alerta
-DF000342/2026 -> pode gerar alerta
+docs/github-actions-odysseus-daily.example.yml
 ```
 
-## Instalação
+Ele deve ser copiado para `.github/workflows/odysseus-daily.yml` apenas no repositório que vai executar a rotina de verdade.
 
-Instale as dependências:
+Para produção, mantenha o `config.toml` real como Secret ou gere o arquivo durante o workflow. Nunca publique banco, planilhas internas ou senha SMTP.
 
-```bash
-pip install -r requirements.txt
-```
+## Segurança
 
-Para Python anterior à versão 3.11, o projeto utiliza `tomli` para leitura de arquivos TOML.
+O Odysséus não burla captcha nem mecanismos de proteção do Mediador/MTE. Quando o site exige captcha, Cloudflare ou bloqueio de sessão, o sistema registra o erro e interrompe de forma controlada conforme a configuração.
 
-## Segurança e privacidade
-
-Este repositório foi preparado para não conter dados reais de produção.
-
-Não devem ser versionados:
-
-* senhas;
-* arquivos `.env`;
-* `config.toml` real;
-* banco de dados real;
-* logs de execução;
-* e-mails gerados;
-* documentos baixados;
-* planilhas internas;
-* arquivos de sessão ou HAR;
-* qualquer arquivo contendo CNPJ, razão social, e-mail interno ou histórico operacional.
-
-O repositório deve conter apenas:
-
-* código-fonte;
-* documentação;
-* `config.example.toml`;
-* `.env.example`;
-* `.gitignore`;
-* arquivos estáticos não sensíveis.
-
-## Observação sobre ambiente real
-
-Para executar o projeto em um ambiente real, cada usuário deve criar sua própria base local a partir dos dados da sua organização.
-
-A estrutura do projeto permite o monitoramento, mas os dados de entrada devem permanecer fora do repositório por segurança e privacidade.
+Se uma senha ou token for publicado acidentalmente, revogue o segredo imediatamente e gere outro.

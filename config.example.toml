@@ -1,6 +1,6 @@
 [app]
 name = "Odysséus"
-db = "data/odysses_cct_base.sample.sqlite"
+db = "data/odysses_cct_base.sqlite"
 reports = "reports"
 logs = "logs"
 downloads = "downloads"
@@ -18,6 +18,38 @@ instrument_types = [
   "termoAditivoAcordo",
   "termoAditivoConvecao"
 ]
+
+[monitor_source]
+# Opções:
+# - "database": usa os sindicatos já gravados no SQLite local.
+# - "google_sheet_filter": usa o SQLite como base bruta e filtra pelos nomes
+#   de uma planilha online compartilhada.
+# - "google_sheet": usa uma planilha online como fonte direta de sindicatos.
+# - "xlsx": usa uma planilha local como fonte direta de sindicatos.
+source = "database"
+google_sheet_url = ""
+source_file = ""
+sheet_name = ""
+filter_column = "NOME DO SINDICATO"
+respect_monitor_ufs = true
+
+[office_companies]
+# Ative depois de informar uma planilha privada com CNPJ das empresas/clientes.
+enabled = false
+source_file = "data/empresas.example.xlsx"
+sheet_name = ""
+google_sheet_url = ""
+refresh_on_daily = true
+company_specific_types = ["acordo", "termoAditivoAcordo"]
+alert_when_company_unknown = true
+
+[summary]
+# "IA" local do Odysséus: extração de texto + regras de leitura, sem API paga.
+enabled = true
+max_bullets = 5
+include_file_type_note = true
+ocr_enabled = false
+ocr_language = "por"
 
 [email]
 enabled = true
@@ -47,7 +79,7 @@ max_new_items_to_send = 50
 timeout = 120
 delay = 2.5
 max_pages = 1000
-empty_limit = 3
-same_page_limit = 5
-repeat_limit = 8
+http_backend = "auto"
+impersonate = "chrome"
+blocked_abort_after = 2
 recaptcha_token = ""
