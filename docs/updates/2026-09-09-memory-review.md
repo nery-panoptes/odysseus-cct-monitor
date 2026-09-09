@@ -5,7 +5,7 @@ O Odysséus recebeu uma nova camada de inteligência operacional gratuita: **Ody
 Essa atualização melhora a conferência de documentos baixados, descartados e enviados por e-mail. O sistema passa a registrar decisões anteriores e usa esse histórico para comparar novos instrumentos com casos parecidos.
 
 <p align="center">
-  <img src="https://github.com/nery-panoptes/odysseus-cct-monitor/raw/main/assets/odysseus-memory-review.png" alt="Odysséus com Memória Operacional" width="520">
+  <img src="https://cdn.jsdelivr.net/gh/nery-panoptes/odysseus-cct-monitor@main/assets/odysseus-memory-review.png" alt="Odysséus com Memória Operacional" width="520">
 </p>
 
 ## O que mudou

@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="https://github.com/nery-panoptes/odysseus-cct-monitor/raw/main/assets/odysseus-github-banner.png" alt="Odysséus CCT Monitor" width="100%">
+  <img src="https://cdn.jsdelivr.net/gh/nery-panoptes/odysseus-cct-monitor@main/assets/odysseus-github-banner.png" alt="Odysséus CCT Monitor" width="100%">
 </p>
 
 # Odysséus CCT Monitor
@@ -18,7 +18,7 @@ Esta versão adiciona uma camada de inteligência operacional ao monitoramento:
 * configuração preparada para execução local ou agendada por GitHub Actions.
 
 <p align="center">
-  <img src="https://github.com/nery-panoptes/odysseus-cct-monitor/raw/main/assets/odysseus-lets-go-larp.png" alt="Meme de atualização do Odysséus: lets go larp" width="520">
+  <img src="https://cdn.jsdelivr.net/gh/nery-panoptes/odysseus-cct-monitor@main/assets/odysseus-lets-go-larp.png" alt="Meme de atualização do Odysséus: lets go larp" width="520">
 </p>
 
 ## Atualização 2026-09-09
@@ -46,7 +46,7 @@ A nova camada **Odysséus Memory** adiciona uma memória operacional gratuita ao
 Ela registra decisões anteriores, compara documentos novos com casos parecidos e separa situações ambíguas em uma Central de Revisão. A ideia é tornar o robô mais criterioso sem depender de API externa, cobrança por uso ou limite diário de tokens.
 
 <p align="center">
-  <img src="https://github.com/nery-panoptes/odysseus-cct-monitor/raw/main/assets/odysseus-memory-review.png" alt="Odysséus com Memória Operacional" width="520">
+  <img src="https://cdn.jsdelivr.net/gh/nery-panoptes/odysseus-cct-monitor@main/assets/odysseus-memory-review.png" alt="Odysséus com Memória Operacional" width="520">
 </p>
 
 Principais pontos:
