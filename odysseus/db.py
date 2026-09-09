@@ -91,6 +91,77 @@ class Db:
         self.ensure_column("monitor_runs", "total_alertas_enviados", "integer default 0")
         self.ensure_column("monitor_runs", "monitor_source", "text")
         self.ensure_column("monitor_runs", "total_empresas", "integer default 0")
+        self.ensure_column("monitor_runs", "total_memory_decisions", "integer default 0")
+        self.ensure_column("monitor_runs", "total_review_items", "integer default 0")
+        self.ensure_column("instrumentos_mte", "memory_decision", "text")
+        self.ensure_column("instrumentos_mte", "memory_confidence", "real")
+        self.ensure_column("instrumentos_mte", "memory_reason", "text")
+        self.ensure_column("instrumentos_mte", "memory_review_status", "text")
+        self.ensure_column("instrumentos_mte", "memory_updated_at", "text")
+
+        cur.execute("""
+            create table if not exists odysseus_memory (
+                id integer primary key autoincrement,
+                instrumento_id integer not null,
+                run_id integer,
+                alerta_id integer,
+                decision text,
+                final_action text,
+                confidence real,
+                reason text,
+                label_source text,
+                evidence_json text,
+                signals_json text,
+                similar_json text,
+                text_fingerprint text,
+                text_terms_json text,
+                file_path text,
+                needs_review integer default 0,
+                created_at text default current_timestamp,
+                updated_at text default current_timestamp,
+                unique(instrumento_id)
+            )
+        """)
+
+        cur.execute("""
+            create table if not exists odysseus_review_queue (
+                id integer primary key autoincrement,
+                instrumento_id integer not null,
+                decision_id integer,
+                status text default 'pending',
+                priority integer default 2,
+                reason text,
+                confidence real,
+                created_at text default current_timestamp,
+                updated_at text default current_timestamp,
+                resolved_at text,
+                resolution text,
+                resolution_note text,
+                unique(instrumento_id)
+            )
+        """)
+
+        cur.execute("""
+            create table if not exists odysseus_memory_feedback (
+                id integer primary key autoincrement,
+                instrumento_id integer not null,
+                decision_id integer,
+                review_id integer,
+                feedback text,
+                note text,
+                created_at text default current_timestamp
+            )
+        """)
+
+        cur.execute("""
+            create index if not exists idx_odysseus_memory_action
+            on odysseus_memory(final_action, decision)
+        """)
+
+        cur.execute("""
+            create index if not exists idx_odysseus_review_status
+            on odysseus_review_queue(status, priority, created_at)
+        """)
 
         self.con.commit()
 
@@ -117,7 +188,11 @@ class Db:
         if name in self.table_columns(table):
             return
 
-        self.con.execute(f"alter table {table} add column {name} {definition}")
+        try:
+            self.con.execute(f"alter table {table} add column {name} {definition}")
+        except sqlite3.OperationalError as err:
+            if "duplicate column name" not in str(err).lower():
+                raise
 
     def counts(self):
         tables = [
@@ -666,6 +741,8 @@ class Db:
                 total_ignorados_ano = ?,
                 total_alertas_criados = ?,
                 total_alertas_enviados = ?,
+                total_memory_decisions = ?,
+                total_review_items = ?,
                 erro = ?
             where id = ?
         """, (
@@ -681,6 +758,8 @@ class Db:
             int(stats.get("total_ignored_old", 0) or 0),
             int(stats.get("total_alerts_created", 0) or 0),
             int(stats.get("total_alerts_sent", 0) or 0),
+            int(stats.get("total_memory_decisions", 0) or 0),
+            int(stats.get("total_review_items", 0) or 0),
             str(error or ""),
             run_id,
         ))
@@ -743,6 +822,454 @@ class Db:
         """, (reg, req, typ)).fetchone()
 
         return row["id"] if row else None
+
+    def upsert_memory_decision(self, record):
+        instrumento_id = int(record.get("instrumento_id") or 0)
+
+        if not instrumento_id:
+            return None
+
+        now_value = now()
+        evidence_json = json.dumps(record.get("evidence") or [], ensure_ascii=False)
+        signals_json = json.dumps(record.get("signals") or {}, ensure_ascii=False)
+        similar_json = json.dumps(record.get("similar") or [], ensure_ascii=False)
+        terms_json = json.dumps(record.get("text_terms") or [], ensure_ascii=False)
+
+        old = self.con.execute("""
+            select id
+            from odysseus_memory
+            where instrumento_id = ?
+            limit 1
+        """, (instrumento_id,)).fetchone()
+
+        values = (
+            int(record.get("run_id") or 0) or None,
+            int(record.get("alerta_id") or 0) or None,
+            str(record.get("decision") or ""),
+            str(record.get("final_action") or ""),
+            float(record.get("confidence") or 0),
+            str(record.get("reason") or ""),
+            str(record.get("label_source") or ""),
+            evidence_json,
+            signals_json,
+            similar_json,
+            str(record.get("text_fingerprint") or ""),
+            terms_json,
+            str(record.get("file_path") or ""),
+            1 if record.get("needs_review") else 0,
+            now_value,
+            instrumento_id,
+        )
+
+        if old:
+            self.con.execute("""
+                update odysseus_memory
+                set
+                    run_id = coalesce(?, run_id),
+                    alerta_id = coalesce(?, alerta_id),
+                    decision = ?,
+                    final_action = ?,
+                    confidence = ?,
+                    reason = ?,
+                    label_source = ?,
+                    evidence_json = ?,
+                    signals_json = ?,
+                    similar_json = ?,
+                    text_fingerprint = ?,
+                    text_terms_json = ?,
+                    file_path = ?,
+                    needs_review = ?,
+                    updated_at = ?
+                where instrumento_id = ?
+            """, values)
+            decision_id = old["id"]
+        else:
+            cur = self.con.cursor()
+            cur.execute("""
+                insert into odysseus_memory (
+                    run_id,
+                    alerta_id,
+                    decision,
+                    final_action,
+                    confidence,
+                    reason,
+                    label_source,
+                    evidence_json,
+                    signals_json,
+                    similar_json,
+                    text_fingerprint,
+                    text_terms_json,
+                    file_path,
+                    needs_review,
+                    updated_at,
+                    instrumento_id
+                ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, values)
+            decision_id = cur.lastrowid
+
+        review_status = "pending" if record.get("needs_review") else "not_required"
+
+        if self.table_exists("instrumentos_mte"):
+            self.con.execute("""
+                update instrumentos_mte
+                set
+                    memory_decision = ?,
+                    memory_confidence = ?,
+                    memory_reason = ?,
+                    memory_review_status = ?,
+                    memory_updated_at = ?
+                where id = ?
+            """, (
+                str(record.get("decision") or ""),
+                float(record.get("confidence") or 0),
+                str(record.get("reason") or ""),
+                review_status,
+                now_value,
+                instrumento_id,
+            ))
+
+        self.con.commit()
+        return decision_id
+
+    def upsert_review_item(self, record, decision_id=None):
+        if not record.get("needs_review"):
+            return None, False
+
+        instrumento_id = int(record.get("instrumento_id") or 0)
+
+        if not instrumento_id:
+            return None, False
+
+        old = self.con.execute("""
+            select id, status
+            from odysseus_review_queue
+            where instrumento_id = ?
+            limit 1
+        """, (instrumento_id,)).fetchone()
+
+        now_value = now()
+        priority = int(record.get("priority") or 2)
+
+        if old:
+            if str(old["status"] or "") == "resolved":
+                return old["id"], False
+
+            self.con.execute("""
+                update odysseus_review_queue
+                set
+                    decision_id = coalesce(?, decision_id),
+                    priority = ?,
+                    reason = ?,
+                    confidence = ?,
+                    updated_at = ?
+                where id = ?
+            """, (
+                int(decision_id or 0) or None,
+                priority,
+                str(record.get("reason") or ""),
+                float(record.get("confidence") or 0),
+                now_value,
+                old["id"],
+            ))
+            self.con.commit()
+            return old["id"], False
+
+        cur = self.con.cursor()
+        cur.execute("""
+            insert into odysseus_review_queue (
+                instrumento_id,
+                decision_id,
+                status,
+                priority,
+                reason,
+                confidence,
+                created_at,
+                updated_at
+            ) values (?, ?, 'pending', ?, ?, ?, ?, ?)
+        """, (
+            instrumento_id,
+            int(decision_id or 0) or None,
+            priority,
+            str(record.get("reason") or ""),
+            float(record.get("confidence") or 0),
+            now_value,
+            now_value,
+        ))
+
+        if self.table_exists("instrumentos_mte"):
+            self.con.execute("""
+                update instrumentos_mte
+                set memory_review_status = 'pending',
+                    memory_updated_at = ?
+                where id = ?
+            """, (now_value, instrumento_id))
+
+        self.con.commit()
+        return cur.lastrowid, True
+
+    def clear_review_item_if_not_needed(self, instrumento_id, reason="auto_not_required"):
+        instrumento_id = int(instrumento_id or 0)
+
+        if not instrumento_id:
+            return
+
+        row = self.con.execute("""
+            select id
+            from odysseus_review_queue
+            where instrumento_id = ?
+              and coalesce(status, 'pending') = 'pending'
+            limit 1
+        """, (instrumento_id,)).fetchone()
+
+        if not row:
+            return
+
+        now_value = now()
+
+        self.con.execute("""
+            update odysseus_review_queue
+            set
+                status = 'resolved',
+                resolved_at = ?,
+                resolution = ?,
+                resolution_note = 'Reavaliação automática não exige mais revisão.',
+                updated_at = ?
+            where id = ?
+        """, (
+            now_value,
+            str(reason or "auto_not_required"),
+            now_value,
+            row["id"],
+        ))
+
+        if self.table_exists("instrumentos_mte"):
+            self.con.execute("""
+                update instrumentos_mte
+                set memory_review_status = 'not_required',
+                    memory_updated_at = ?
+                where id = ?
+            """, (now_value, instrumento_id))
+
+        self.con.commit()
+
+    def memory_examples(self, limit=500, exclude_instrumento_id=None):
+        if not self.table_exists("odysseus_memory"):
+            return []
+
+        params = []
+        where = "where coalesce(m.final_action, '') != ''"
+
+        if exclude_instrumento_id:
+            where += " and m.instrumento_id != ?"
+            params.append(int(exclude_instrumento_id))
+
+        params.append(int(limit or 500))
+
+        sql = f"""
+            select
+                m.*,
+                i.sindicato_cnpj,
+                i.sindicato_nome,
+                i.tipo_instrumento,
+                i.numero_registro,
+                i.numero_solicitacao,
+                i.empresa_filter_status
+            from odysseus_memory m
+            left join instrumentos_mte i on i.id = m.instrumento_id
+            {where}
+            order by m.updated_at desc, m.id desc
+            limit ?
+        """
+
+        return [dict(row) for row in self.con.execute(sql, params).fetchall()]
+
+    def instruments_for_memory(self, limit=0, include_baseline=False, actionable_only=True):
+        if not self.table_exists("instrumentos_mte"):
+            return []
+
+        params = []
+        where = "where 1 = 1"
+
+        if not include_baseline:
+            where += " and coalesce(i.conhecido_antes_do_robo, 0) = 0"
+
+        if actionable_only:
+            where += """
+                and (
+                    a.id is not null
+                    or coalesce(i.empresa_filter_status, '') != ''
+                    or coalesce(i.arquivo_path, '') != ''
+                    or coalesce(i.resumo_mudancas, '') != ''
+                )
+            """
+
+        sql = f"""
+            select
+                i.*,
+                a.id as alerta_id,
+                a.enviado as alerta_enviado,
+                a.enviado_em as alerta_enviado_em,
+                a.erro_envio as alerta_erro_envio
+            from instrumentos_mte i
+            left join alertas_email a on a.instrumento_id = i.id
+            {where}
+            order by i.id desc
+        """
+
+        if limit:
+            sql += " limit ?"
+            params.append(int(limit))
+
+        return [dict(row) for row in self.con.execute(sql, params).fetchall()]
+
+    def review_items(self, status="pending", limit=30):
+        if not self.table_exists("odysseus_review_queue"):
+            return []
+
+        status = str(status or "pending").strip().lower()
+        params = []
+        where = ""
+
+        if status != "all":
+            where = "where coalesce(q.status, 'pending') = ?"
+            params.append(status)
+
+        params.append(int(limit or 30))
+
+        sql = f"""
+            select
+                q.*,
+                m.decision,
+                m.final_action,
+                m.evidence_json,
+                m.similar_json,
+                i.sindicato_nome,
+                i.sindicato_cnpj,
+                i.tipo_instrumento,
+                i.numero_registro,
+                i.numero_solicitacao,
+                i.data_registro,
+                i.vigencia_inicio,
+                i.vigencia_fim,
+                i.uf,
+                i.arquivo_path,
+                i.empresa_filter_status,
+                i.empresa_filter_motivo
+            from odysseus_review_queue q
+            left join odysseus_memory m on m.id = q.decision_id
+            left join instrumentos_mte i on i.id = q.instrumento_id
+            {where}
+            order by
+                case coalesce(q.status, 'pending') when 'pending' then 0 else 1 end,
+                q.priority desc,
+                q.created_at desc
+            limit ?
+        """
+
+        return [dict(row) for row in self.con.execute(sql, params).fetchall()]
+
+    def resolve_review_item(self, review_id=0, instrumento_id=0, resolution="", note=""):
+        params = []
+        where = ""
+
+        if review_id:
+            where = "id = ?"
+            params.append(int(review_id))
+        elif instrumento_id:
+            where = "instrumento_id = ?"
+            params.append(int(instrumento_id))
+        else:
+            raise RuntimeError("Informe review_id ou instrumento_id para resolver a revisão.")
+
+        row = self.con.execute(
+            f"select * from odysseus_review_queue where {where} limit 1",
+            params,
+        ).fetchone()
+
+        if not row:
+            raise RuntimeError("Item de revisão não encontrado.")
+
+        now_value = now()
+
+        self.con.execute(f"""
+            update odysseus_review_queue
+            set
+                status = 'resolved',
+                resolved_at = ?,
+                resolution = ?,
+                resolution_note = ?,
+                updated_at = ?
+            where {where}
+        """, [now_value, str(resolution or ""), str(note or ""), now_value] + params)
+
+        self.con.execute("""
+            insert into odysseus_memory_feedback (
+                instrumento_id,
+                decision_id,
+                review_id,
+                feedback,
+                note,
+                created_at
+            ) values (?, ?, ?, ?, ?, ?)
+        """, (
+            int(row["instrumento_id"] or 0),
+            int(row["decision_id"] or 0) or None,
+            int(row["id"] or 0),
+            str(resolution or ""),
+            str(note or ""),
+            now_value,
+        ))
+
+        if self.table_exists("instrumentos_mte"):
+            self.con.execute("""
+                update instrumentos_mte
+                set memory_review_status = 'resolved',
+                    memory_updated_at = ?
+                where id = ?
+            """, (now_value, int(row["instrumento_id"] or 0)))
+
+        self.con.commit()
+        return dict(row)
+
+    def update_memory_manual_label(self, instrumento_id, decision, final_action, reason):
+        now_value = now()
+        self.con.execute("""
+            update odysseus_memory
+            set
+                decision = ?,
+                final_action = ?,
+                confidence = 1.0,
+                reason = ?,
+                label_source = 'manual',
+                needs_review = 0,
+                updated_at = ?
+            where instrumento_id = ?
+        """, (
+            str(decision or ""),
+            str(final_action or ""),
+            str(reason or ""),
+            now_value,
+            int(instrumento_id or 0),
+        ))
+
+        if self.table_exists("instrumentos_mte"):
+            self.con.execute("""
+                update instrumentos_mte
+                set
+                    memory_decision = ?,
+                    memory_confidence = 1.0,
+                    memory_reason = ?,
+                    memory_review_status = 'resolved',
+                    memory_updated_at = ?
+                where id = ?
+            """, (
+                str(decision or ""),
+                str(reason or ""),
+                now_value,
+                int(instrumento_id or 0),
+            ))
+
+        self.con.commit()
 
     def close(self):
         self.con.close()

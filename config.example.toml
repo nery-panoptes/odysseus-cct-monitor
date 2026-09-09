@@ -51,6 +51,15 @@ include_file_type_note = true
 ocr_enabled = false
 ocr_language = "por"
 
+[memory]
+# Memória operacional local: usa histórico e similaridade textual em SQLite.
+enabled = true
+review_threshold = 0.70
+similarity_threshold = 0.28
+similarity_pool = 500
+max_terms = 90
+max_text_chars = 60000
+
 [email]
 enabled = true
 provider = "smtp"

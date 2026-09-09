@@ -95,6 +95,22 @@ def collect_health_report(db, cfg, days=30):
         "and coalesce(empresa_filter_status, '') = 'not_matched'",
         (since,),
     )
+    recent_memory_decisions = _count(
+        db,
+        "odysseus_memory",
+        "date(created_at) >= ?",
+        (since,),
+    )
+    review_pending = _count(
+        db,
+        "odysseus_review_queue",
+        "coalesce(status, 'pending') = 'pending'",
+    )
+    review_resolved = _count(
+        db,
+        "odysseus_review_queue",
+        "coalesce(status, '') = 'resolved'",
+    )
 
     last_instrument = _one(
         db,
@@ -140,6 +156,8 @@ def collect_health_report(db, cfg, days=30):
                 total_filtrados_empresa,
                 total_alertas_criados,
                 total_alertas_enviados,
+                total_memory_decisions,
+                total_review_items,
                 monitor_source,
                 total_empresas,
                 erro,
@@ -238,6 +256,19 @@ def collect_health_report(db, cfg, days=30):
         limit 8
         """,
     )
+    memory_action_status = []
+
+    if db.table_exists("odysseus_memory"):
+        memory_action_status = _rows(
+            db,
+            """
+            select coalesce(final_action, '(vazio)') as action, count(*) as total
+            from odysseus_memory
+            group by coalesce(final_action, '(vazio)')
+            order by total desc, action
+            limit 10
+            """,
+        )
 
     points = []
     status = "saudável"
@@ -251,6 +282,10 @@ def collect_health_report(db, cfg, days=30):
     if pending_alerts:
         status = "atenção" if status == "saudável" else status
         points.append(f"Existem {pending_alerts} alerta(s) pendente(s) no banco.")
+
+    if review_pending:
+        status = "atenção" if status == "saudável" else status
+        points.append(f"Existem {review_pending} caso(s) pendente(s) na Central de Revisão.")
 
     failed_runs = sum(
         int(row.get("total", 0) or 0)
@@ -297,6 +332,9 @@ def collect_health_report(db, cfg, days=30):
             "baixados_periodo": recent_downloaded,
             "resumos_periodo": recent_summaries,
             "filtrados_empresa_periodo": recent_filtered_company,
+            "memory_decisions_periodo": recent_memory_decisions,
+            "review_pendentes": review_pending,
+            "review_resolvidos": review_resolved,
         },
         "last_instrument": last_instrument,
         "last_email": last_email,
@@ -307,6 +345,7 @@ def collect_health_report(db, cfg, days=30):
         "filter_status": filter_status,
         "summary_status": summary_status,
         "pending_by_error": pending_by_error,
+        "memory_action_status": memory_action_status,
         "points": points,
     }
 
@@ -325,6 +364,8 @@ def format_health_text(report):
         f"- Documentos baixados no período: {totals['baixados_periodo']}",
         f"- Resumos gerados no período: {totals['resumos_periodo']}",
         f"- Acordos filtrados por empresa fora da base: {totals['filtrados_empresa_periodo']}",
+        f"- Decisões da memória operacional no período: {totals['memory_decisions_periodo']}",
+        f"- Casos pendentes na Central de Revisão: {totals['review_pendentes']}",
         f"- Alertas enviados: {totals['alertas_enviados']}",
         f"- Alertas pendentes: {totals['alertas_pendentes']}",
         f"- Empresas na base do escritório: {totals['empresas_escritorio']}",
@@ -342,6 +383,8 @@ def format_health_text(report):
             f"- Sindicatos: {last.get('total_sindicatos') or 0}",
             f"- Consultas: {last.get('total_consultas') or 0}",
             f"- Novos: {last.get('total_novos') or 0}",
+            f"- Decisões da memória: {last.get('total_memory_decisions') or 0}",
+            f"- Casos para revisão: {last.get('total_review_items') or 0}",
             f"- Erros: {last.get('total_erros') or 0}",
             "",
         ])
@@ -377,6 +420,14 @@ def format_health_text(report):
 
         for row in report["pending_by_error"]:
             lines.append(f"- {row.get('erro')}: {row.get('total')}")
+
+        lines.append("")
+
+    if report["memory_action_status"]:
+        lines.append("Memória operacional por ação:")
+
+        for row in report["memory_action_status"]:
+            lines.append(f"- {row.get('action')}: {row.get('total')}")
 
         lines.append("")
 
@@ -443,6 +494,8 @@ def render_health_html(report):
             row.get("total_consultas") or 0,
             row.get("total_novos") or 0,
             row.get("total_filtrados_empresa") or 0,
+            row.get("total_memory_decisions") or 0,
+            row.get("total_review_items") or 0,
             row.get("total_erros") or 0,
         ])
 
@@ -463,6 +516,7 @@ def render_health_html(report):
         for row in report["summary_status"]
     ]
     pending = [[row.get("erro") or "", row.get("total") or 0] for row in report["pending_by_error"]]
+    memory_actions = [[row.get("action") or "", row.get("total") or 0] for row in report["memory_action_status"]]
     points = "".join(f"<li>{escape(point)}</li>" for point in report["points"])
 
     return f"""<!doctype html>
@@ -620,10 +674,16 @@ def render_health_html(report):
               {_metric_cell("Filtrados por empresa", totals["filtrados_empresa_periodo"], "acordos fora da base")}
             </tr>
             <tr>
+              {_metric_cell("Memória", totals["memory_decisions_periodo"], "decisões no período")}
+              {_metric_cell("Revisão pendente", totals["review_pendentes"], "casos para conferir")}
+              {_metric_cell("Revisão resolvida", totals["review_resolvidos"], "feedback manual")}
+              {_metric_cell("Empresas na base", totals["empresas_escritorio"], "cadastro do escritório")}
+            </tr>
+            <tr>
               {_metric_cell("Alertas enviados", totals["alertas_enviados"], "histórico total")}
               {_metric_cell("Alertas pendentes", totals["alertas_pendentes"], "precisam de atenção se crescer")}
-              {_metric_cell("Empresas na base", totals["empresas_escritorio"], "cadastro do escritório")}
               {_metric_cell("Instrumentos no banco", totals["instrumentos"], "histórico acumulado")}
+              {_metric_cell("Status", status.upper(), "diagnóstico geral")}
             </tr>
           </table>
 
@@ -631,7 +691,7 @@ def render_health_html(report):
           <ul>{points}</ul>
 
           <h2>Últimas Execuções</h2>
-          {_table(["Início", "Status", "Duração", "Sindicatos", "Consultas", "Novos", "Filtrados", "Erros"], runs)}
+          {_table(["Início", "Status", "Duração", "Sindicatos", "Consultas", "Novos", "Filtrados", "Memória", "Revisão", "Erros"], runs)}
 
           <h2>Novidades por Dia</h2>
           {_table(["Dia", "Novos", "Baixados", "Resumos", "Filtrados por empresa"], daily)}
@@ -644,6 +704,9 @@ def render_health_html(report):
 
           <h2>Resumo Automático</h2>
           {_table(["Status", "Tipo de arquivo", "Total"], summary_status)}
+
+          <h2>Memória Operacional</h2>
+          {_table(["Ação", "Total"], memory_actions)}
 
           <h2>Alertas Pendentes</h2>
           {_table(["Motivo", "Total"], pending)}

@@ -67,6 +67,18 @@ jobs:
             cat logs/health-report-latest.txt
           } >> "$GITHUB_STEP_SUMMARY"
 
+      - name: Generate Operational Memory Report
+        if: always()
+        run: |
+          mkdir -p logs
+          python -u app.py memory-report --days 30 | tee logs/memory-report-latest.txt
+          {
+            echo ""
+            echo "## Memória Operacional do Odysséus"
+            echo ""
+            cat logs/memory-report-latest.txt
+          } >> "$GITHUB_STEP_SUMMARY"
+
       - name: Upload logs
         if: always()
         uses: actions/upload-artifact@v4

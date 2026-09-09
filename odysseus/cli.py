@@ -9,6 +9,15 @@ from .cfg import loadcfg, sec
 from .db import Db
 from .emailer import Emailer
 from .mte import DOWNLOAD_URL, INSTRUMENT_TYPES, MteClient
+from .memory import (
+    collect_memory_report,
+    format_memory_report,
+    format_review_items,
+    rebuild_operational_memory,
+    record_memory_decision,
+    resolution_to_manual_label,
+    review_items_for_csv,
+)
 from .office import (
     apply_company_filter,
     format_company_matches,
@@ -198,6 +207,30 @@ def cmd_email_test(args):
         print("E-mail enviado com sucesso.")
 
 
+def cmd_email_config_check(args):
+    cfg = loadcfg(args.config)
+    diagnostics = Emailer(cfg).diagnostics()
+
+    print("Configuração de e-mail conferida.")
+    print(f"- Destinatários To: {len(diagnostics['to'])}")
+    print(f"- Destinatários Cc: {len(diagnostics['cc'])}")
+    print(f"- Destinatários Bcc: {len(diagnostics['bcc'])}")
+    print(f"- Total único para envio: {len(diagnostics['recipients'])}")
+    print(f"- Dry-run ativo: {'sim' if diagnostics['dry_run'] else 'não'}")
+
+    if diagnostics["missing"]:
+        print("- Campos ausentes: " + ", ".join(diagnostics["missing"]))
+    else:
+        print("- Campos obrigatórios preenchidos.")
+
+    if diagnostics["recipients"]:
+        print("")
+        print("Destinatários reconhecidos:")
+
+        for item in diagnostics["recipients"]:
+            print(f"- {item}")
+
+
 def cmd_health_report(args):
     cfg = loadcfg(args.config)
     db = opendb(cfg)
@@ -229,6 +262,89 @@ def cmd_health_report(args):
             print("Dry-run ativo. E-mail do Health Report gravado em:", result["path"])
         else:
             print("E-mail do Health Report enviado com sucesso.")
+
+
+def cmd_memory_index(args):
+    cfg = loadcfg(args.config)
+    db = opendb(cfg)
+
+    try:
+        result = rebuild_operational_memory(
+            db,
+            cfg,
+            limit=args.limit,
+            include_baseline=args.include_baseline,
+            include_all=args.include_all,
+            extract_files=args.extract_files,
+        )
+    finally:
+        db.close()
+
+    print("Memória operacional reconstruída.")
+    print(f"- Registros analisados: {result['total_rows']}")
+    print(f"- Decisões indexadas: {result['indexed']}")
+    print(f"- Novos casos enviados à revisão: {result['review_created']}")
+    print(f"- Ignorados: {result['skipped']}")
+
+
+def cmd_memory_report(args):
+    cfg = loadcfg(args.config)
+    db = opendb(cfg)
+
+    try:
+        report = collect_memory_report(db, cfg, days=args.days)
+    finally:
+        db.close()
+
+    print(format_memory_report(report))
+
+
+def cmd_review_center(args):
+    cfg = loadcfg(args.config)
+    db = opendb(cfg)
+
+    try:
+        if args.resolve or args.instrument_id:
+            review = db.resolve_review_item(
+                review_id=args.resolve,
+                instrumento_id=args.instrument_id,
+                resolution=args.decision,
+                note=args.note,
+            )
+            manual_decision, manual_action, reason = resolution_to_manual_label(args.decision)
+            note = str(args.note or "").strip()
+
+            if note:
+                reason = f"{reason}: {note}"
+
+            db.update_memory_manual_label(
+                review["instrumento_id"],
+                manual_decision,
+                manual_action,
+                reason,
+            )
+
+            print("Caso resolvido na Central de Revisão.")
+            print(f"- Revisão: #{review['id']}")
+            print(f"- Instrumento: #{review['instrumento_id']}")
+            print(f"- Decisão manual: {manual_decision} / {manual_action}")
+            print("")
+
+        items = db.review_items(status=args.status, limit=args.limit)
+
+        if args.export:
+            out = root(
+                Path(cfg["base"]),
+                args.export,
+            )
+            write_csv(out, review_items_for_csv(items))
+            print(f"Central de Revisão exportada: {out}")
+            print("")
+
+    finally:
+        db.close()
+
+    print(format_review_items(items))
 
 
 def cmd_seed_baseline(args):
@@ -504,6 +620,8 @@ def build_daily_body(new_items, errors, finished_at=None, stats=None):
         lines.append(f"- Instrumentos ignorados por ano antigo/sem ano: {stats.get('total_ignored_old', 0)}")
         lines.append(f"- Acordos ignorados por empresa fora da base: {stats.get('total_filtered_company', 0)}")
         lines.append(f"- Documentos baixados: {stats.get('total_downloaded', 0)}")
+        lines.append(f"- Decisões registradas na memória operacional: {stats.get('total_memory_decisions', 0)}")
+        lines.append(f"- Novos casos enviados à Central de Revisão: {stats.get('total_review_items', 0)}")
         lines.append(f"- Ocorrências/erros: {len(errors)}")
 
     if errors:
@@ -604,6 +722,8 @@ def cmd_daily(args):
     total_filtered_company = 0
     total_alerts_created = 0
     total_alerts_sent = 0
+    total_memory_decisions = 0
+    total_review_items = 0
     blocked_hits = 0
     blocked_abort_after = int(sec(cfg, "mte").get("blocked_abort_after", 2))
 
@@ -625,6 +745,8 @@ def cmd_daily(args):
             "total_errors": len(errors),
             "total_alerts_created": total_alerts_created,
             "total_alerts_sent": total_alerts_sent,
+            "total_memory_decisions": total_memory_decisions,
+            "total_review_items": total_review_items,
         }
 
     try:
@@ -750,11 +872,28 @@ def cmd_daily(args):
                                 total_ignored_old += 1
 
                                 if not no_send:
-                                    db.save_mte_instrument(
+                                    old_inst_id, _old_was_new = db.save_mte_instrument(
                                         item,
                                         sindicato_nome=name,
                                         known_before=True,
                                     )
+
+                                    memory_decision = record_memory_decision(
+                                        db,
+                                        cfg,
+                                        item,
+                                        old_inst_id,
+                                        forced_action="discard_old",
+                                        forced_reason="instrumento ignorado por ano antigo ou sem ano configurado para alerta",
+                                        strict_file_check=False,
+                                        run_id=run_id,
+                                    )
+
+                                    if memory_decision:
+                                        total_memory_decisions += 1
+
+                                        if memory_decision.get("review_created"):
+                                            total_review_items += 1
 
                                 continue
 
@@ -810,6 +949,22 @@ def cmd_daily(args):
                                 )
 
                             if not company_decision.get("should_alert", True):
+                                memory_decision = record_memory_decision(
+                                    db,
+                                    cfg,
+                                    item,
+                                    inst_id,
+                                    file_path=file_path,
+                                    company_decision=company_decision,
+                                    run_id=run_id,
+                                )
+
+                                if memory_decision:
+                                    total_memory_decisions += 1
+
+                                    if memory_decision.get("review_created"):
+                                        total_review_items += 1
+
                                 total_filtered_company += 1
                                 print(
                                     "      ignorado: empresa do acordo fora da base do escritório "
@@ -822,9 +977,11 @@ def cmd_daily(args):
                             if file_path:
                                 attachments.append(file_path)
 
+                            summary = ""
+
                             if inst_id and file_path:
                                 try:
-                                    summarize_daily_doc(
+                                    summary = summarize_daily_doc(
                                         db,
                                         cfg,
                                         item,
@@ -857,6 +1014,25 @@ def cmd_daily(args):
                                 if created:
                                     total_alerts_created += 1
 
+                            memory_decision = record_memory_decision(
+                                db,
+                                cfg,
+                                item,
+                                inst_id,
+                                file_path=file_path,
+                                company_decision=company_decision,
+                                summary=summary,
+                                run_id=run_id,
+                                alert_id=alert_id if not no_send else None,
+                            )
+
+                            if memory_decision:
+                                total_memory_decisions += 1
+                                item["memory_decision"] = memory_decision
+
+                                if memory_decision.get("review_created"):
+                                    total_review_items += 1
+
                             new_items.append(item)
 
                     except FatalMteBlock:
@@ -887,6 +1063,8 @@ def cmd_daily(args):
         print(f"Ignorados por ano antigo/sem ano: {total_ignored_old}")
         print(f"Ignorados por empresa fora da base: {total_filtered_company}")
         print(f"Documentos baixados: {total_downloaded}")
+        print(f"Decisões na memória operacional: {total_memory_decisions}")
+        print(f"Novos casos para revisão: {total_review_items}")
         print(f"Erros: {len(errors)}")
         print("")
 
@@ -1088,6 +1266,9 @@ def main():
     p.add_argument("--create-alert", action="store_true", help="Cria um alerta fictício no banco antes do teste.")
     p.set_defaults(func=cmd_email_test)
 
+    p = sub.add_parser("email-config-check", help="Confere destinatários e campos básicos de e-mail sem enviar.")
+    p.set_defaults(func=cmd_email_config_check)
+
     for command_name in ("health-report", "diagnose"):
         p = sub.add_parser(command_name, help="Gera diagnóstico operacional do Odysséus.")
         p.add_argument("--days", type=int, default=30, help="Quantidade de dias analisados.")
@@ -1095,6 +1276,27 @@ def main():
         p.add_argument("--output", default="", help="Caminho do relatório HTML. Implica --html.")
         p.add_argument("--send", action="store_true", help="Envia o Health Report por e-mail.")
         p.set_defaults(func=cmd_health_report)
+
+    p = sub.add_parser("memory-index", help="Reconstrói a memória operacional com base no histórico local.")
+    p.add_argument("--limit", type=int, default=0, help="Limita a quantidade de instrumentos indexados.")
+    p.add_argument("--include-baseline", action="store_true", help="Inclui instrumentos conhecidos antes do robô.")
+    p.add_argument("--include-all", action="store_true", help="Inclui instrumentos sem arquivo, alerta, resumo ou filtro.")
+    p.add_argument("--extract-files", action="store_true", help="Reprocessa o texto dos arquivos históricos; mais lento.")
+    p.set_defaults(func=cmd_memory_index)
+
+    p = sub.add_parser("memory-report", help="Mostra indicadores da memória operacional.")
+    p.add_argument("--days", type=int, default=30, help="Quantidade de dias recentes analisados.")
+    p.set_defaults(func=cmd_memory_report)
+
+    p = sub.add_parser("review-center", help="Lista, exporta ou resolve casos da Central de Revisão.")
+    p.add_argument("--status", default="pending", choices=["pending", "resolved", "all"], help="Status dos casos listados.")
+    p.add_argument("--limit", type=int, default=30, help="Quantidade máxima de casos listados.")
+    p.add_argument("--export", default="", help="Exporta a listagem para CSV no caminho informado.")
+    p.add_argument("--resolve", type=int, default=0, help="ID da revisão a resolver.")
+    p.add_argument("--instrument-id", type=int, default=0, help="Resolve pelo ID do instrumento, se preferir.")
+    p.add_argument("--decision", default="review", help="Decisão manual: send/enviar, discard/descartar ou review/revisar.")
+    p.add_argument("--note", default="", help="Observação manual sobre a revisão.")
+    p.set_defaults(func=cmd_review_center)
 
     p = sub.add_parser("seed-baseline", help="Cria a base inicial de instrumentos já conhecidos, sem disparar e-mail.")
     p.add_argument("--limit", type=int, default=0, help="Limita a quantidade de sindicatos para teste.")

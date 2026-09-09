@@ -39,6 +39,27 @@ python -u app.py health-report --days 30
 python -u app.py diagnose --days 30 --html
 ```
 
+## Atualização 2026-09-09 - Odysséus Memory
+
+A nova camada **Odysséus Memory** adiciona uma memória operacional gratuita ao monitoramento.
+
+Ela registra decisões anteriores, compara documentos novos com casos parecidos e separa situações ambíguas em uma Central de Revisão. A ideia é tornar o robô mais criterioso sem depender de API externa, cobrança por uso ou limite diário de tokens.
+
+<p align="center">
+  <img src="assets/odysseus-memory-review.png" alt="Odysséus com Memória Operacional" width="520">
+</p>
+
+Principais pontos:
+
+* histórico local de documentos enviados, descartados, baixados e resumidos;
+* decisão sugerida com grau de confiança;
+* evidências da triagem, como filtro de empresas, CNPJs e necessidade de OCR;
+* comparação textual com casos parecidos;
+* Central de Revisão para feedback manual;
+* conferência de destinatários de e-mail antes do envio.
+
+Página da atualização: [docs/updates/2026-09-09-memory-review.md](docs/updates/2026-09-09-memory-review.md)
+
 ## O que ele faz
 
 * Consulta acordos coletivos, convenções coletivas e termos aditivos no Mediador/MTE.
@@ -48,6 +69,7 @@ python -u app.py diagnose --days 30 --html
 * Resume localmente os pontos principais dos documentos novos.
 * Filtra acordos específicos de empresa quando a empresa do documento não está na base de clientes.
 * Gera diagnóstico operacional com o Health Report.
+* Registra decisões na Memória Operacional e encaminha casos ambíguos para revisão.
 
 ## IA local gratuita
 
@@ -195,6 +217,24 @@ Gerar diagnóstico operacional:
 
 ```bash
 python -u app.py health-report --days 30 --html
+```
+
+Reconstruir a memória operacional:
+
+```bash
+python -u app.py memory-index
+```
+
+Ver a Central de Revisão:
+
+```bash
+python -u app.py review-center
+```
+
+Conferir configuração de e-mail:
+
+```bash
+python -u app.py email-config-check
 ```
 
 Gerar baseline inicial:

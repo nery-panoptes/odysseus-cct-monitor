@@ -1,13 +1,52 @@
 from email.message import EmailMessage
-from email.utils import formataddr
+from email.utils import formataddr, getaddresses, parseaddr
 from pathlib import Path
 import html
 import mimetypes
+import re
 import smtplib
 import ssl
 
 from .cfg import env, sec
 from .util import now, root
+
+
+EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+
+
+def _raw_addresses(value):
+    if value is None:
+        return []
+
+    if isinstance(value, str):
+        return [value.replace(";", ",")]
+
+    return [str(item or "").replace(";", ",") for item in value]
+
+
+def _normalize_addresses(value):
+    addresses = []
+
+    for name, email in getaddresses(_raw_addresses(value)):
+        email = str(email or "").strip()
+
+        if not email:
+            continue
+
+        if name:
+            addresses.append(formataddr((name, email)))
+        else:
+            addresses.append(email)
+
+    return addresses
+
+
+def _email_part(address):
+    return parseaddr(str(address or ""))[1].strip()
+
+
+def _valid_email(address):
+    return bool(EMAIL_RE.match(_email_part(address)))
 
 
 class Emailer:
@@ -98,19 +137,49 @@ class Emailer:
         return subject
 
     def recipients(self):
-        to = self.ecfg.get("to", []) or []
-        cc = self.ecfg.get("cc", []) or []
-        bcc = self.ecfg.get("bcc", []) or []
+        to = _normalize_addresses(self.ecfg.get("to", []))
+        cc = _normalize_addresses(self.ecfg.get("cc", []))
+        bcc = _normalize_addresses(self.ecfg.get("bcc", []))
 
         recipients = []
+        seen = set()
 
         for item in to + cc + bcc:
             item = str(item or "").strip()
+            email = _email_part(item).lower()
 
-            if item:
+            if item and email not in seen:
+                seen.add(email)
                 recipients.append(item)
 
+        invalid = [item for item in recipients if not _valid_email(item)]
+
+        if invalid:
+            raise RuntimeError(
+                "Destinatário(s) de e-mail inválido(s) no config.toml: "
+                + ", ".join(invalid)
+            )
+
         return to, cc, bcc, recipients
+
+    def diagnostics(self):
+        to, cc, bcc, recipients = self.recipients()
+
+        required = {
+            "from_email": str(self.ecfg.get("from_email", "") or "").strip(),
+            "smtp_host": str(self.ecfg.get("smtp_host", "") or "").strip(),
+            "smtp_port": str(self.ecfg.get("smtp_port", "") or "").strip(),
+        }
+        missing = [key for key, value in required.items() if not value]
+
+        return {
+            "to": to,
+            "cc": cc,
+            "bcc": bcc,
+            "recipients": recipients,
+            "missing": missing,
+            "dry_run": bool(self.ecfg.get("dry_run", True)),
+        }
 
     def build_message(self, subject, body, attachments=None):
         attachments = attachments or []
