@@ -15,8 +15,8 @@ name: Odysséus Daily
 on:
   workflow_dispatch:
   schedule:
-    # 08:30 no horário de Brasília, que equivale a 11:30 UTC.
-    - cron: "30 11 * * *"
+    - cron: "30 8 * * *"
+      timezone: "America/Sao_Paulo"
 
 jobs:
   daily:
@@ -55,6 +55,17 @@ jobs:
         run: |
           mkdir -p logs
           python -u app.py daily | tee "logs/daily-$(date +'%Y-%m-%d-%H-%M').log"
+
+      - name: Generate Health Report
+        if: always()
+        run: |
+          mkdir -p logs reports
+          python -u app.py health-report --days 30 --html --output reports/health-report-latest.html | tee logs/health-report-latest.txt
+          {
+            echo "## Health Report do Odysséus"
+            echo ""
+            cat logs/health-report-latest.txt
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload logs
         if: always()

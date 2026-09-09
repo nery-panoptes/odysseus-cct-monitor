@@ -21,6 +21,24 @@ Esta versão adiciona uma camada de inteligência operacional ao monitoramento:
   <img src="assets/odysseus-lets-go-larp.png" alt="Meme de atualização do Odysséus: lets go larp" width="520">
 </p>
 
+## Atualização 2026-09-09
+
+O Odysséus recebeu o **Health Report**, um diagnóstico operacional gratuito para acompanhar a saúde das rotinas.
+
+* registro estruturado de cada execução diária;
+* rastreamento de cada consulta ao Mediador/MTE;
+* status, tempo de resposta, HTTP e mensagem por consulta;
+* relatório em terminal e HTML;
+* resumo automático no GitHub Actions;
+* leitura direta do SQLite, sem API paga e sem consumo de tokens.
+
+Comandos:
+
+```bash
+python -u app.py health-report --days 30
+python -u app.py diagnose --days 30 --html
+```
+
 ## O que ele faz
 
 * Consulta acordos coletivos, convenções coletivas e termos aditivos no Mediador/MTE.
@@ -29,6 +47,7 @@ Esta versão adiciona uma camada de inteligência operacional ao monitoramento:
 * Envia e-mail de conclusão mesmo quando nada novo é encontrado, se configurado.
 * Resume localmente os pontos principais dos documentos novos.
 * Filtra acordos específicos de empresa quando a empresa do documento não está na base de clientes.
+* Gera diagnóstico operacional com o Health Report.
 
 ## IA local gratuita
 
@@ -170,6 +189,12 @@ Rodar a rotina diária real:
 
 ```bash
 python -u app.py daily
+```
+
+Gerar diagnóstico operacional:
+
+```bash
+python -u app.py health-report --days 30 --html
 ```
 
 Gerar baseline inicial:

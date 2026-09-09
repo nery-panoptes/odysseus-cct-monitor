@@ -81,6 +81,16 @@ class Db:
         self.ensure_column("instrumentos_mte", "empresas_documento_json", "text")
         self.ensure_column("instrumentos_mte", "empresas_escritorio_json", "text")
         self.ensure_column("instrumentos_mte", "empresa_filter_motivo", "text")
+        self.ensure_column("monitor_runs", "total_coletados", "integer default 0")
+        self.ensure_column("monitor_runs", "total_existentes", "integer default 0")
+        self.ensure_column("monitor_runs", "total_baixados", "integer default 0")
+        self.ensure_column("monitor_runs", "total_erros", "integer default 0")
+        self.ensure_column("monitor_runs", "total_filtrados_empresa", "integer default 0")
+        self.ensure_column("monitor_runs", "total_ignorados_ano", "integer default 0")
+        self.ensure_column("monitor_runs", "total_alertas_criados", "integer default 0")
+        self.ensure_column("monitor_runs", "total_alertas_enviados", "integer default 0")
+        self.ensure_column("monitor_runs", "monitor_source", "text")
+        self.ensure_column("monitor_runs", "total_empresas", "integer default 0")
 
         self.con.commit()
 
@@ -597,6 +607,125 @@ class Db:
             where id in ({marks})
         """, [str(error)] + alert_ids)
 
+        self.con.commit()
+
+    def begin_monitor_run(self):
+        cur = self.con.cursor()
+        cur.execute("""
+            insert into monitor_runs (
+                started_at,
+                status
+            ) values (?, 'running')
+        """, (now(),))
+        self.con.commit()
+        return cur.lastrowid
+
+    def update_monitor_run_context(
+        self,
+        run_id,
+        total_sindicatos=0,
+        monitor_source="",
+        total_empresas=0,
+    ):
+        if not run_id:
+            return
+
+        self.con.execute("""
+            update monitor_runs
+            set
+                total_sindicatos = ?,
+                monitor_source = ?,
+                total_empresas = ?
+            where id = ?
+        """, (
+            int(total_sindicatos or 0),
+            str(monitor_source or ""),
+            int(total_empresas or 0),
+            run_id,
+        ))
+        self.con.commit()
+
+    def finish_monitor_run(self, run_id, status, stats=None, error=""):
+        if not run_id:
+            return
+
+        stats = stats or {}
+
+        self.con.execute("""
+            update monitor_runs
+            set
+                finished_at = ?,
+                status = ?,
+                total_consultas = ?,
+                total_novos = ?,
+                total_coletados = ?,
+                total_existentes = ?,
+                total_baixados = ?,
+                total_erros = ?,
+                total_filtrados_empresa = ?,
+                total_ignorados_ano = ?,
+                total_alertas_criados = ?,
+                total_alertas_enviados = ?,
+                erro = ?
+            where id = ?
+        """, (
+            now(),
+            str(status or ""),
+            int(stats.get("total_queries", 0) or 0),
+            int(stats.get("total_new", 0) or 0),
+            int(stats.get("total_seen", 0) or 0),
+            int(stats.get("total_existing", 0) or 0),
+            int(stats.get("total_downloaded", 0) or 0),
+            int(stats.get("total_errors", 0) or 0),
+            int(stats.get("total_filtered_company", 0) or 0),
+            int(stats.get("total_ignored_old", 0) or 0),
+            int(stats.get("total_alerts_created", 0) or 0),
+            int(stats.get("total_alerts_sent", 0) or 0),
+            str(error or ""),
+            run_id,
+        ))
+        self.con.commit()
+
+    def record_mte_query(
+        self,
+        run_id,
+        sindicato_cnpj,
+        sindicato_nome,
+        uf,
+        tipo_instrumento,
+        status,
+        http_code="",
+        message="",
+        elapsed_ms=0,
+    ):
+        if not run_id:
+            return
+
+        self.con.execute("""
+            insert into consultas_mte (
+                run_id,
+                sindicato_cnpj,
+                sindicato_nome,
+                uf,
+                tipo_instrumento,
+                status,
+                http_code,
+                mensagem,
+                tempo_ms,
+                created_at
+            ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            run_id,
+            str(sindicato_cnpj or ""),
+            str(sindicato_nome or ""),
+            str(uf or ""),
+            str(tipo_instrumento or ""),
+            str(status or ""),
+            str(http_code or ""),
+            str(message or ""),
+            int(elapsed_ms or 0),
+            now(),
+        ))
         self.con.commit()
 
     def instrument_exists(self, item):

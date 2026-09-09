@@ -1,5 +1,6 @@
 import argparse
 import re
+import time
 from datetime import datetime
 from pathlib import Path
 from urllib.parse import quote
@@ -15,6 +16,7 @@ from .office import (
     monitor_name_filter_report,
     refresh_office_companies,
 )
+from .health import collect_health_report, format_health_text, write_health_html
 from .report import write_csv
 from .summarizer import build_document_summary, detect_file_type, summary_enabled
 from .util import root
@@ -194,6 +196,40 @@ def cmd_email_test(args):
         print("Dry-run ativo. E-mail gravado em:", result["path"])
     else:
         print("E-mail enviado com sucesso.")
+
+
+def cmd_health_report(args):
+    cfg = loadcfg(args.config)
+    db = opendb(cfg)
+
+    try:
+        report = collect_health_report(db, cfg, days=args.days)
+    finally:
+        db.close()
+
+    body = format_health_text(report)
+    print(body)
+
+    html_path = None
+
+    if args.html or args.output or args.send:
+        html_path = write_health_html(cfg, report, output=args.output)
+        print("")
+        print(f"Relatório HTML gerado em: {html_path}")
+
+    if args.send:
+        attachments = [str(html_path)] if html_path else []
+        result = Emailer(cfg).send(
+            "Health Report do Odysséus",
+            body,
+            attachments=attachments,
+        )
+
+        if result.get("dry_run"):
+            print("Dry-run ativo. E-mail do Health Report gravado em:", result["path"])
+        else:
+            print("E-mail do Health Report enviado com sucesso.")
+
 
 def cmd_seed_baseline(args):
     cfg = loadcfg(args.config)
@@ -553,6 +589,7 @@ def summarize_daily_doc(db, cfg, item, instrumento_id, file_path):
 def cmd_daily(args):
     cfg = loadcfg(args.config)
     db = opendb(cfg)
+    run_id = None
 
     limit = getattr(args, "limit", None)
     no_send = getattr(args, "no_send", False)
@@ -565,6 +602,8 @@ def cmd_daily(args):
     total_downloaded = 0
     total_ignored_old = 0
     total_filtered_company = 0
+    total_alerts_created = 0
+    total_alerts_sent = 0
     blocked_hits = 0
     blocked_abort_after = int(sec(cfg, "mte").get("blocked_abort_after", 2))
 
@@ -574,7 +613,23 @@ def cmd_daily(args):
     attachments = []
     seen_keys = set()
 
+    def current_stats():
+        return {
+            "total_queries": total_queries,
+            "total_seen": total_seen,
+            "total_existing": total_existing,
+            "total_new": total_new,
+            "total_ignored_old": total_ignored_old,
+            "total_filtered_company": total_filtered_company,
+            "total_downloaded": total_downloaded,
+            "total_errors": len(errors),
+            "total_alerts_created": total_alerts_created,
+            "total_alerts_sent": total_alerts_sent,
+        }
+
     try:
+        run_id = db.begin_monitor_run()
+
         if bool(sec(cfg, "office_companies").get("refresh_on_daily", True)):
             office_companies = refresh_office_companies(cfg, db)
         else:
@@ -584,6 +639,13 @@ def cmd_daily(args):
 
         if limit:
             rows = rows[:limit]
+
+        db.update_monitor_run_context(
+            run_id,
+            total_sindicatos=len(rows),
+            monitor_source=monitor_source,
+            total_empresas=len(office_companies),
+        )
 
         client = MteClient(cfg)
 
@@ -607,6 +669,7 @@ def cmd_daily(args):
 
                 for typ in INSTRUMENT_TYPES.keys():
                     total_queries += 1
+                    query_started = time.perf_counter()
 
                     try:
                         result = client.search(
@@ -614,11 +677,24 @@ def cmd_daily(args):
                             uf=uf,
                             instrument_type=typ,
                         )
+                        elapsed_ms = int((time.perf_counter() - query_started) * 1000)
 
                         status = result.get("status")
                         items = result.get("items") or []
 
                         print(f"    - {typ}: {status} | coletados: {len(items)}")
+
+                        db.record_mte_query(
+                            run_id,
+                            cnpj,
+                            name,
+                            uf,
+                            typ,
+                            status,
+                            http_code=result.get("http_code") or "",
+                            message=result.get("message") or "",
+                            elapsed_ms=elapsed_ms,
+                        )
 
                         if not result.get("ok", True):
                             message = result.get("message") or "Consulta recusada pelo MTE."
@@ -778,6 +854,9 @@ def cmd_daily(args):
                                 if alert_id:
                                     alert_ids.append(alert_id)
 
+                                if created:
+                                    total_alerts_created += 1
+
                             new_items.append(item)
 
                     except FatalMteBlock:
@@ -786,6 +865,17 @@ def cmd_daily(args):
                     except Exception as err:
                         errors.append(f"{name} | {cnpj} | {uf} | {typ}: {err}")
                         print(f"    - {typ}: ERRO | {err}")
+                        elapsed_ms = int((time.perf_counter() - query_started) * 1000)
+                        db.record_mte_query(
+                            run_id,
+                            cnpj,
+                            name,
+                            uf,
+                            typ,
+                            "exception",
+                            message=str(err),
+                            elapsed_ms=elapsed_ms,
+                        )
 
             print("")
 
@@ -802,15 +892,7 @@ def cmd_daily(args):
 
         finished_at = datetime.now().strftime("%d/%m/%Y às %H:%M:%S")
 
-        stats = {
-            "total_queries": total_queries,
-            "total_seen": total_seen,
-            "total_existing": total_existing,
-            "total_new": total_new,
-            "total_ignored_old": total_ignored_old,
-            "total_filtered_company": total_filtered_company,
-            "total_downloaded": total_downloaded,
-        }
+        stats = current_stats()
 
         body = build_daily_body(
             new_items,
@@ -823,12 +905,14 @@ def cmd_daily(args):
 
         if not new_items and not send_empty:
             print("Nenhuma novidade encontrada. E-mail não enviado.")
+            db.finish_monitor_run(run_id, "success_no_email", current_stats())
             return
 
         if no_send:
             print("Modo --no-send ativo. E-mail não enviado.")
             print("")
             print(body)
+            db.finish_monitor_run(run_id, "no_send", current_stats())
             return
 
         max_new_items = int(sec(cfg, "email").get("max_new_items_to_send", 50))
@@ -841,6 +925,12 @@ def cmd_daily(args):
             print("Isso normalmente indica baseline incompleto ou mudança de parâmetro de busca.")
             print("Os alertas foram criados no banco, mas o e-mail não foi enviado.")
             print("Revise a base antes de enviar.")
+            db.finish_monitor_run(
+                run_id,
+                "email_blocked_safety",
+                current_stats(),
+                "Quantidade de novos instrumentos acima do limite configurado.",
+            )
             return
 
         result = Emailer(cfg).send(
@@ -851,8 +941,11 @@ def cmd_daily(args):
 
         if result.get("dry_run"):
             print("Dry-run ativo. E-mail gravado em:", result["path"])
+            db.finish_monitor_run(run_id, "dry_run", current_stats())
         else:
             db.mark_alerts_sent(alert_ids)
+            total_alerts_sent = len(alert_ids)
+            db.finish_monitor_run(run_id, "success", current_stats())
             print("E-mail de monitoramento enviado com sucesso.")
 
     except FatalMteBlock as err:
@@ -864,6 +957,7 @@ def cmd_daily(args):
         print("")
         print(f"Execução interrompida: {err}")
         print("Nenhum e-mail de monitoramento foi enviado.")
+        db.finish_monitor_run(run_id, "blocked", current_stats(), str(err))
 
     except Exception as err:
         try:
@@ -871,6 +965,7 @@ def cmd_daily(args):
         except Exception:
             pass
 
+        db.finish_monitor_run(run_id, "failed", current_stats(), str(err))
         raise
 
     finally:
@@ -992,6 +1087,14 @@ def main():
     p = sub.add_parser("email-test", help="Testa o envio de e-mail.")
     p.add_argument("--create-alert", action="store_true", help="Cria um alerta fictício no banco antes do teste.")
     p.set_defaults(func=cmd_email_test)
+
+    for command_name in ("health-report", "diagnose"):
+        p = sub.add_parser(command_name, help="Gera diagnóstico operacional do Odysséus.")
+        p.add_argument("--days", type=int, default=30, help="Quantidade de dias analisados.")
+        p.add_argument("--html", action="store_true", help="Também gera um relatório HTML em reports/.")
+        p.add_argument("--output", default="", help="Caminho do relatório HTML. Implica --html.")
+        p.add_argument("--send", action="store_true", help="Envia o Health Report por e-mail.")
+        p.set_defaults(func=cmd_health_report)
 
     p = sub.add_parser("seed-baseline", help="Cria a base inicial de instrumentos já conhecidos, sem disparar e-mail.")
     p.add_argument("--limit", type=int, default=0, help="Limita a quantidade de sindicatos para teste.")
