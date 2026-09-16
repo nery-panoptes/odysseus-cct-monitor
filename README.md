@@ -60,6 +60,21 @@ Principais pontos:
 
 Página da atualização: [docs/updates/2026-09-09-memory-review.md](docs/updates/2026-09-09-memory-review.md)
 
+## Atualização 2026-09-16 - Robustez e confiabilidade
+
+Esta rodada não adiciona funcionalidade nova — melhora a forma como o Odysséus reage quando o Mediador/MTE, a planilha online ou o SMTP falham no meio do caminho.
+
+<p align="center">
+  <img src="https://cdn.jsdelivr.net/gh/nery-panoptes/odysseus-cct-monitor@main/assets/odysseus-update-reading.png" alt="Odysséus estudando sua própria autodefesa" width="420">
+</p>
+
+* nova tentativa automática, com espera progressiva, em toda chamada de rede (MTE, planilha online e SMTP);
+* distinção entre falha passageira (tenta de novo) e falha permanente, como senha errada (reporta na hora, sem insistir à toa);
+* paginação do Mediador/MTE tolera algumas páginas vazias ou repetidas antes de encerrar a busca, em vez de parar na primeira;
+* detecção explícita quando o layout do Mediador/MTE muda de um jeito que o parser não reconhece mais, em vez de virar silenciosamente "nenhum resultado";
+* extração de texto de documentos `.doc` antigos agora funciona também no runner Linux do GitHub Actions, não só no macOS;
+* logs de cada execução diária passam a ficar arquivados por 90 dias como artefato do workflow.
+
 ## O que ele faz
 
 * Consulta acordos coletivos, convenções coletivas e termos aditivos no Mediador/MTE.
