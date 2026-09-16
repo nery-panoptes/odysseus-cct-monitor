@@ -25,6 +25,10 @@ Esta versão adiciona uma camada de inteligência operacional ao monitoramento:
 
 O Odysséus recebeu o **Health Report**, um diagnóstico operacional gratuito para acompanhar a saúde das rotinas.
 
+<p align="center">
+  <img src="https://cdn.jsdelivr.net/gh/nery-panoptes/odysseus-cct-monitor@main/assets/odysseus-health-report.png" alt="Odysséus sentindo o impacto de uma rotina sem diagnóstico" width="420">
+</p>
+
 * registro estruturado de cada execução diária;
 * rastreamento de cada consulta ao Mediador/MTE;
 * status, tempo de resposta, HTTP e mensagem por consulta;
