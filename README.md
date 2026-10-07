@@ -6,24 +6,24 @@
 
 Odysséus é uma automação em Python para consultar periodicamente instrumentos coletivos registrados no Mediador/MTE, manter histórico local e enviar alertas por e-mail quando surgirem novas convenções, acordos ou termos aditivos relevantes.
 
-## Atualização 2026-07-24
+## Atualização 24/07/2026
 
-Esta versão adiciona uma camada de inteligência operacional ao monitoramento:
+Esta versão reforça o monitoramento diário e deixa a rotina mais criteriosa:
 
 * filtro de sindicatos por planilha online do Google Sheets;
 * filtro de acordos específicos por CNPJ das empresas/clientes do escritório;
-* resumo automático local dos documentos baixados;
+* resumo local dos documentos baixados;
 * detecção do tipo de arquivo baixado e indicação de necessidade de OCR;
 * melhoria no tratamento de bloqueios/captcha do Mediador/MTE;
 * configuração preparada para execução local ou agendada por GitHub Actions.
 
 <p align="center">
-  <img src="https://cdn.jsdelivr.net/gh/nery-panoptes/odysseus-cct-monitor@main/assets/odysseus-lets-go-larp.png" alt="Meme de atualização do Odysséus: lets go larp" width="520">
+  <img src="https://cdn.jsdelivr.net/gh/nery-panoptes/odysseus-cct-monitor@main/assets/odysseus-lets-go-larp.png" alt="Arte de atualização do Odysséus" width="520">
 </p>
 
-## Atualização 2026-09-09
+## Atualização 09/09/2026
 
-O Odysséus recebeu o **Health Report**, um diagnóstico operacional gratuito para acompanhar a saúde das rotinas.
+O Odysséus recebeu o **Health Report**, um diagnóstico operacional para acompanhar a saúde das rotinas.
 
 <p align="center">
   <img src="https://cdn.jsdelivr.net/gh/nery-panoptes/odysseus-cct-monitor@main/assets/odysseus-health-report.png" alt="Odysséus sentindo o impacto de uma rotina sem diagnóstico" width="420">
@@ -33,8 +33,8 @@ O Odysséus recebeu o **Health Report**, um diagnóstico operacional gratuito pa
 * rastreamento de cada consulta ao Mediador/MTE;
 * status, tempo de resposta, HTTP e mensagem por consulta;
 * relatório em terminal e HTML;
-* resumo automático no GitHub Actions;
-* leitura direta do SQLite, sem API paga e sem consumo de tokens.
+* resumo da execução no GitHub Actions;
+* leitura direta do SQLite local, sem serviço externo.
 
 Comandos:
 
@@ -43,11 +43,11 @@ python -u app.py health-report --days 30
 python -u app.py diagnose --days 30 --html
 ```
 
-## Atualização 2026-09-09 - Odysséus Memory
+## Atualização 09/09/2026 - Memória Operacional
 
-A nova camada **Odysséus Memory** adiciona uma memória operacional gratuita ao monitoramento.
+A nova camada de **Memória Operacional** adiciona histórico de decisões ao monitoramento.
 
-Ela registra decisões anteriores, compara documentos novos com casos parecidos e separa situações ambíguas em uma Central de Revisão. A ideia é tornar o robô mais criterioso sem depender de API externa, cobrança por uso ou limite diário de tokens.
+Ela registra decisões anteriores, compara documentos novos com casos parecidos e separa situações ambíguas em uma Central de Revisão. A ideia é tornar o robô mais criterioso usando apenas os dados locais do próprio projeto.
 
 <p align="center">
   <img src="https://cdn.jsdelivr.net/gh/nery-panoptes/odysseus-cct-monitor@main/assets/odysseus-memory-review.png" alt="Odysséus com Memória Operacional" width="520">
@@ -62,7 +62,7 @@ Principais pontos:
 * Central de Revisão para feedback manual;
 * conferência de destinatários de e-mail antes do envio.
 
-Página da atualização: [docs/updates/2026-09-09-memory-review.md](docs/updates/2026-09-09-memory-review.md)
+Página da atualização: [Memória Operacional e Central de Revisão](docs/updates/2026-09-09-memory-review.md)
 
 ## Atualização 2026-09-16 - Robustez e confiabilidade
 
@@ -90,13 +90,13 @@ Esta rodada não adiciona funcionalidade nova — melhora a forma como o Odyssé
 * Gera diagnóstico operacional com o Health Report.
 * Registra decisões na Memória Operacional e encaminha casos ambíguos para revisão.
 
-## IA local gratuita
+## Leitura Local Dos Documentos
 
-A IA desta versão se chama, dentro do projeto, **Odysséus Local Rules**.
+O resumo dos documentos é feito no próprio Python, a partir do texto extraído dos arquivos baixados.
 
-Ela não usa OpenAI, Gemini, Claude ou qualquer API paga. O resumo é feito no próprio Python, com extração de texto, identificação de cláusulas, datas, valores, benefícios, jornada, descontos e comparação com documento anterior quando existir arquivo comparável salvo.
+O sistema procura cláusulas, datas, valores, benefícios, jornada, descontos e, quando existe arquivo anterior comparável, destaca diferenças relevantes para o e-mail.
 
-Isso mantém custo zero e evita limite diário de tokens. Para PDFs escaneados, o projeto pode indicar necessidade de OCR. O OCR também pode ser mantido em custo zero usando ferramentas locais como Tesseract/OCRmyPDF, caso sejam instaladas no ambiente.
+Para PDFs escaneados, o projeto pode indicar necessidade de OCR. Se necessário, o OCR pode ser feito localmente com ferramentas como Tesseract/OCRmyPDF, desde que estejam instaladas no ambiente.
 
 ## Fluxo atual
 
@@ -107,7 +107,7 @@ Isso mantém custo zero e evita limite diário de tokens. Para PDFs escaneados, 
 5. Para cada sindicato, UF e tipo de instrumento, ele consulta o Mediador/MTE.
 6. Se o MTE retornar bloqueio, captcha ou Cloudflare, a rotina registra o erro e pode abortar depois do limite configurado.
 7. Quando encontra instrumento novo, ele grava no banco e baixa o documento.
-8. O resumo local extrai texto do arquivo e gera bullets curtos para o e-mail.
+8. O resumo local extrai texto do arquivo e monta pontos curtos para o e-mail.
 9. Se o instrumento for acordo ou termo aditivo de acordo, o sistema procura CNPJs de empresas nas partes do documento.
 10. Se a empresa do acordo não estiver na base de empresas/clientes, o alerta é filtrado e não é enviado.
 11. Se passar nos filtros, o e-mail é enviado com o resumo e com o documento anexo.

@@ -67,7 +67,7 @@ jobs:
             cat logs/health-report-latest.txt
           } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Generate Operational Memory Report
+      - name: Generate review memory report
         if: always()
         run: |
           mkdir -p logs

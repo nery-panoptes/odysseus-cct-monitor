@@ -1,6 +1,6 @@
-# Atualização 2026-09-09 - Odysséus Memory
+# Atualização 09/09/2026 - Memória Operacional
 
-O Odysséus recebeu uma nova camada de inteligência operacional gratuita: **Odysséus Memory**.
+O Odysséus recebeu uma nova camada de **Memória Operacional**.
 
 Essa atualização melhora a conferência de documentos baixados, descartados e enviados por e-mail. O sistema passa a registrar decisões anteriores e usa esse histórico para comparar novos instrumentos com casos parecidos.
 
@@ -33,9 +33,9 @@ Quando um documento novo é encontrado, o Odysséus coleta os sinais já dispon�
 
 Com base nesses sinais, ele classifica a situação como envio, descarte ou revisão. Casos com baixa confiança, conflito de padrão, falha de leitura ou possível necessidade de OCR entram na Central de Revisão.
 
-## Custo
+## Funcionamento Local
 
-A atualização mantém o objetivo de custo zero. Não há uso de OpenAI, Gemini, Claude ou qualquer API paga. A memória usa Python, SQLite e comparação textual local.
+A memória usa Python, SQLite e comparação textual local. O histórico fica no próprio banco do projeto e pode ser revisado a qualquer momento pela Central de Revisão.
 
 ## Comandos
 
@@ -60,7 +60,7 @@ python -u app.py review-center
 Exportar a Central de Revisão:
 
 ```bash
-python -u app.py review-center --export reports/review_center_$(date +"%Y-%m-%d").csv
+python -u app.py review-center --export reports/review_center_$(date +"%d-%m-%Y").csv
 ```
 
 Resolver um caso manualmente:

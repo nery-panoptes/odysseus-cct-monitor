@@ -44,7 +44,7 @@ company_specific_types = ["acordo", "termoAditivoAcordo"]
 alert_when_company_unknown = true
 
 [summary]
-# "IA" local do Odysséus: extração de texto + regras de leitura, sem API paga.
+# Resumo local do Odysséus: extração de texto + regras de leitura.
 enabled = true
 max_bullets = 5
 include_file_type_note = true
