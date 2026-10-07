@@ -64,7 +64,7 @@ Principais pontos:
 
 Página da atualização: [Memória Operacional e Central de Revisão](docs/updates/2026-09-09-memory-review.md)
 
-## Atualização 2026-09-16 - Robustez e confiabilidade
+## Atualização 16/09/2026 - Robustez e confiabilidade
 
 Esta rodada não adiciona funcionalidade nova — melhora a forma como o Odysséus reage quando o Mediador/MTE, a planilha online ou o SMTP falham no meio do caminho.
 
